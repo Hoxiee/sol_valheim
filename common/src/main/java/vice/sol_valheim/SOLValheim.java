@@ -13,6 +13,7 @@ import net.minecraft.core.registries.Registries;
 #endif
 
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.world.effect.MobEffect;
 import net.minecraft.world.entity.ai.attributes.AttributeModifier;
@@ -21,6 +22,7 @@ import me.shedaniel.autoconfig.AutoConfig;
 import me.shedaniel.autoconfig.serializer.JanksonConfigSerializer;
 import me.shedaniel.autoconfig.serializer.PartitioningSerializer;
 import org.slf4j.Logger;
+import vice.sol_valheim.utils.TextPlural;
 
 import java.util.List;
 
@@ -106,7 +108,8 @@ public class SOLValheim
 		}
 
 		if (item.is(RESETS_FOOD)) {
-			list.add(Component.literal("☠ Empties Your Stomach!").withStyle(ChatFormatting.GREEN));
+            MutableComponent emptyStomachText = Component.translatable("tooltip.sol_valheim.empty_stomach");
+			list.add(emptyStomachText.withStyle(ChatFormatting.GREEN));
 			return;
 		}
 
@@ -114,13 +117,19 @@ public class SOLValheim
 		if (config == null)
 			return;
 
-		var hearts = config.getHearts() % 2 == 0 ? config.getHearts() / 2 : String.format("%.1f", (float) config.getHearts() / 2f);
-		list.add(Component.literal("❤ " + hearts + " Heart" + (config.getHearts() / 2f > 1 ? "s" : "")).withStyle(ChatFormatting.RED));
-		list.add(Component.literal("☀ " + String.format("%.1f", config.getHealthRegen()) + " Regen").withStyle(ChatFormatting.DARK_RED));
+        float heartCount = (float) config.getHearts() / 2f;
+        var hearts = config.getHearts() % 2 == 0 ? config.getHearts() / 2 : String.format("%.1f", heartCount);
+		list.add(TextPlural.translatable("tooltip.sol_valheim.hearts", heartCount, hearts.toString())
+            .withStyle(ChatFormatting.RED)
+        );
+		list.add(Component.translatable("tooltip.sol_valheim.regen", String.format("%.1f", config.getHealthRegen()))
+            .withStyle(ChatFormatting.DARK_RED)
+        );
 
 		var minutes = (float) config.getTime() / (20 * 60);
-
-		list.add(Component.literal("⌚ " + String.format("%.0f", minutes)  + " Minute" + (minutes > 1 ? "s" : "")).withStyle(ChatFormatting.GOLD));
+        list.add(TextPlural.translatable("tooltip.sol_valheim.duration", Math.round(minutes))
+            .withStyle(ChatFormatting.GOLD)
+        );
 
 		for (var effect : config.extraEffects) {
 			var eff = effect.getEffect();
@@ -131,9 +140,9 @@ public class SOLValheim
 		}
 
 		if (isConsumablePotion) {
-			list.add(Component.literal("❄ Refreshing! Can be consumed anytime!").withStyle(ChatFormatting.AQUA));
+			list.add(Component.translatable("tooltip.sol_valheim.refreshing").withStyle(ChatFormatting.AQUA));
 		} else if (item.is(CAN_EAT_EARLY) || food.getFoodProperties().canAlwaysEat()) {
-			list.add(Component.literal("⌛ Can be consumed anytime!").withStyle(ChatFormatting.DARK_PURPLE));
+			list.add(Component.translatable("tooltip.sol_valheim.consume").withStyle(ChatFormatting.DARK_PURPLE));
 		}
 	}
 }

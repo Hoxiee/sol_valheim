@@ -104,7 +104,7 @@ public class ModConfig extends PartitioningSerializer.GlobalData {
         public int regenDelay = 20 * 10;
 
         @ConfigEntry.Gui.Tooltip() @Comment("Time in seconds after spawning before sprinting is disabled")
-        public int respawnGracePeriod = 60 * 5;
+        public int respawnGracePeriod = 10;
 
         @ConfigEntry.Gui.Tooltip() @Comment("Extra speed given when your hearts are full (0 to disable)")
         public float speedBoost = 0.20f;
@@ -231,7 +231,7 @@ public class ModConfig extends PartitioningSerializer.GlobalData {
 
         public static class FoodComponentConfig {
             @ConfigEntry.Gui.Tooltip @Comment("X position offset in scaled pixels")
-            public int xOffset = -92;
+            public int xOffset = 92;
             @ConfigEntry.Gui.Tooltip @Comment("Y position offset in scaled pixels")
             public int yOffset = -39;
             @ConfigEntry.Gui.Tooltip @Comment("X position relative to screen, 0 = left, 1 = right")

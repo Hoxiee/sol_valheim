@@ -1,0 +1,15 @@
+{
+  "tooltip.sol_valheim.empty_stomach": "☠ Опустошает желудок!",
+  "tooltip.sol_valheim.hearts": "❤ %s Сердце",
+  "tooltip.sol_valheim.hearts.plural_few": "❤ %s Сердца",
+  "tooltip.sol_valheim.hearts.plural_many": "❤ %s Сердец",
+  "tooltip.sol_valheim.hearts.plural_other": "❤ %s Сердец",
+  "tooltip.sol_valheim.regen": "☀ %s Регенерация",
+  "tooltip.sol_valheim.duration": "⌚ %s Минута",
+  "tooltip.sol_valheim.duration.plural_few": "⌚ %s Минуты",
+  "tooltip.sol_valheim.duration.plural_many": "⌚ %s Минут",
+  "tooltip.sol_valheim.duration.plural_other": "⌚ %s Минут",
+  "tooltip.sol_valheim.refreshing": "❄ Освежает! Можно употреблять в любое время!",
+  "tooltip.sol_valheim.effect": "★ %s",
+  "tooltip.sol_valheim.consume": "⌛ Можно употреблять в любое время!"
+}

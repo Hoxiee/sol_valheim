@@ -73,6 +73,9 @@ public class FoodHUD implements ClientGuiEvent.RenderHud
         if (client.player == null)
             return;
 
+        if (client.player.isCreative() || client.player.isSpectator())
+            return;
+
         var solPlayer = (PlayerEntityMixinDataAccessor) client.player;
 
         var foodData = solPlayer.sol_valheim$getFoodData();

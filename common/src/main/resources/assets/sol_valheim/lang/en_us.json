@@ -1,0 +1,15 @@
+{
+  "tooltip.sol_valheim.empty_stomach": "☠ Empties Your Stomach!",
+  "tooltip.sol_valheim.hearts": "❤ %s Heart",
+  "tooltip.sol_valheim.hearts.plural_few": "❤ %s Hearts",
+  "tooltip.sol_valheim.hearts.plural_many": "❤ %s Hearts",
+  "tooltip.sol_valheim.hearts.plural_other": "❤ %s Hearts",
+  "tooltip.sol_valheim.regen": "☀ %s Regen",
+  "tooltip.sol_valheim.duration": "⌚ %s Minute",
+  "tooltip.sol_valheim.duration.plural_few": "⌚ %s Minutes",
+  "tooltip.sol_valheim.duration.plural_many": "⌚ %s Minutes",
+  "tooltip.sol_valheim.duration.plural_other": "⌚ %s Minutes",
+  "tooltip.sol_valheim.refreshing": "❄ Refreshing! Can be consumed anytime!",
+  "tooltip.sol_valheim.effect": "★ %s",
+  "tooltip.sol_valheim.consume": "⌛ Can be consumed anytime!"
+}
