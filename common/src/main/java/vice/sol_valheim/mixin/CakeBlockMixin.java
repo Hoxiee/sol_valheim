@@ -16,21 +16,28 @@ import vice.sol_valheim.accessors.PlayerEntityMixinDataAccessor;
 @Mixin(CakeBlock.class)
 public class CakeBlockMixin
 {
+    /**
+     * Cake is the one food that is eaten straight off a block: it calls {@code FoodData.eat(int, float)}
+     * and never touches {@code Player.eat}, so it needs its own hook.
+     */
     @Inject(at = @At("HEAD"), method = "eat(Lnet/minecraft/world/level/LevelAccessor;Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/state/BlockState;Lnet/minecraft/world/entity/player/Player;)Lnet/minecraft/world/InteractionResult;", cancellable = true)
-    private static void canEatCake(LevelAccessor level, BlockPos pos, BlockState state, Player player, CallbackInfoReturnable<InteractionResult> cir)
+    private static void sol_valheim$canEatCake(LevelAccessor level, BlockPos pos, BlockState state, Player player, CallbackInfoReturnable<InteractionResult> cir)
     {
-        var foodData = ((PlayerEntityMixinDataAccessor) player).sol_valheim$getFoodData();
-        var canEat = foodData.canEat(Items.CAKE);
-        if (canEat)
-        {
-            if (level.isClientSide())
-                return;
+        var accessor = (PlayerEntityMixinDataAccessor) player;
+        var foodData = accessor.sol_valheim$getFoodData();
+        if (foodData == null)
+            return;
 
-            foodData.eatItem(Items.CAKE);
+        if (!foodData.canEat(Items.CAKE))
+        {
+            // PASS leaves the slice in place, so the player can come back to it later
+            cir.setReturnValue(InteractionResult.PASS);
             return;
         }
 
-        cir.setReturnValue(InteractionResult.PASS);
-        cir.cancel();
+        if (level.isClientSide())
+            return;
+
+        accessor.sol_valheim$consume(Items.CAKE.getDefaultInstance());
     }
 }

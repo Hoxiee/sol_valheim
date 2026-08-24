@@ -1,14 +1,17 @@
 modLoader="javafml"
 loaderVersion = "[${forge},)"
 license="GNU LGPL 3.0"
-issueTrackerURL="https://Anthony/sol_valheim/issues"
+issueTrackerURL="https://github.com/anthxnymc/sol_valheim/issues"
 
 [[mods]]
 modId = "${id}"
 version = "${version}"
 displayName = "${display_name}"
-authors = "Me!"
+authors = "anthxnymc, Hoxiee"
 description = '''
+Valheim style food. Eat up to three different dishes at a time, each one adding hearts and health
+regeneration for as long as it lasts, instead of filling a hunger bar. Food values are generated for
+every item in the pack and can be overridden per item from the config or from a datapack.
 '''
 logoFile = "icon.png"
 
@@ -24,4 +27,18 @@ modId = "minecraft"
 mandatory = true
 versionRange = "${minecraft_version}"
 ordering = "NONE"
+side = "BOTH"
+
+[[dependencies.${id}]]
+modId = "architectury"
+mandatory = true
+versionRange = "*"
+ordering = "AFTER"
+side = "BOTH"
+
+[[dependencies.${id}]]
+modId = "cloth_config"
+mandatory = true
+versionRange = "*"
+ordering = "AFTER"
 side = "BOTH"

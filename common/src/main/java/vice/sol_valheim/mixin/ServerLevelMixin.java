@@ -13,10 +13,17 @@ import java.util.function.BooleanSupplier;
 @Mixin(ServerLevel.class)
 public class ServerLevelMixin
 {
+    /**
+     * Runs the food timers down over a night that was slept through.
+     * <p>
+     * The old code clamped every slot to {@code max(1200, left - passed)}, which handed free time to
+     * anything with under a minute left - sleeping actually topped your food back up to a minute.
+     * Now the elapsed ticks are simply subtracted and empty slots expire like they would have.
+     */
     @Inject(at = @At(value = "INVOKE", target = "Lnet/minecraft/server/level/ServerLevel;setDayTime(J)V"), method = "tick")
     public void onSleep(BooleanSupplier hasTimeLeft, CallbackInfo ci)
     {
-        if (!SOLValheim.Config.common.passTicksDuringNight)
+        if (SOLValheim.Config == null || !SOLValheim.Config.common.passTicksDuringNight)
             return;
 
         var level = (ServerLevel) (Object) this;
@@ -25,19 +32,18 @@ public class ServerLevelMixin
         var l = dayTime + 24000L;
         var newTime = l - l % 24000L;
 
-        var passedTicks = Math.max(0, newTime - dayTime);
+        var passedTicks = (int) Math.min(Integer.MAX_VALUE, Math.max(0L, newTime - dayTime));
         if (passedTicks == 0)
             return;
 
         for (var player : level.players()) {
-            var foodData = ((PlayerEntityMixinDataAccessor) player).sol_valheim$getFoodData();
-            if (foodData.DrinkSlot != null) {
-                foodData.DrinkSlot.ticksLeft = (int) Math.max(1200, foodData.DrinkSlot.ticksLeft - passedTicks);
-            }
-            for (var item : foodData.ItemEntries)
-            {
-                item.ticksLeft = (int) Math.max(1200, item.ticksLeft - passedTicks);
-            }
+            var accessor = (PlayerEntityMixinDataAccessor) player;
+            var foodData = accessor.sol_valheim$getFoodData();
+            if (foodData == null || foodData.isEmpty())
+                continue;
+
+            foodData.advance(passedTicks);
+            accessor.sol_valheim$sync();
         }
     }
 }

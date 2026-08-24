@@ -5,13 +5,10 @@ import me.shedaniel.autoconfig.annotation.Config;
 import me.shedaniel.autoconfig.annotation.ConfigEntry;
 import me.shedaniel.autoconfig.serializer.PartitioningSerializer;
 import me.shedaniel.cloth.clothconfig.shadowed.blue.endless.jankson.Comment;
-import net.minecraft.resources.ResourceLocation;
 import net.minecraft.util.Mth;
 import net.minecraft.world.effect.MobEffect;
-import net.minecraft.world.food.FoodProperties;
 import net.minecraft.world.item.Item;
-import net.minecraft.world.item.Items;
-import net.minecraft.world.item.UseAnim;
+import vice.sol_valheim.utils.RegistryHelper;
 
 import java.util.*;
 
@@ -20,61 +17,16 @@ import java.util.*;
 @Config.Gui.Background("minecraft:textures/block/stone.png")
 public class ModConfig extends PartitioningSerializer.GlobalData {
 
+    /**
+     * Resolved food values for an item, or null when the item is not treated as food at all.
+     * <p>
+     * Resolution order is datapack override &gt; config entry &gt; auto generated - see
+     * {@link FoodConfigManager}. This is a pure lookup: it never mutates the config, so it is safe
+     * to call from the render thread and from tooltips.
+     */
     public static Common.FoodConfig getFoodConfig(Item item) {
-        var isDrink = item.getDefaultInstance().getUseAnimation() == UseAnim.DRINK;
-        if(item != Items.CAKE && !item.isEdible() && !isDrink)
-            return null;
-
-        var existing = SOLValheim.Config.common.foodConfigs.get(item.arch$registryName().toString());
-        if (existing == null)
-        {
-            var registry = item.arch$registryName().toString();
-
-            var food = item == Items.CAKE
-                    ? new FoodProperties.Builder().nutrition(10).saturationMod(0.7f).build()
-                    : item.getFoodProperties();
-
-            if (isDrink) {
-                if (registry.contains("potion")) {
-                    food = new FoodProperties.Builder().nutrition(4).saturationMod(0.75f).build();
-                }
-                else if (registry.contains("milk")) {
-                    food = new FoodProperties.Builder().nutrition(6).saturationMod(1f).build();
-                }
-                else {
-                    food = new FoodProperties.Builder().nutrition(2).saturationMod(0.5f).build();
-                }
-            }
-
-            existing = new Common.FoodConfig();
-            existing.nutrition = food.getNutrition();
-            existing.healthRegenModifier = 1f;
-            existing.saturationModifier = food.getSaturationModifier();
-
-            if (registry.startsWith("farmers"))
-            {
-                existing.nutrition = (int) ((existing.nutrition * 1.25));
-                existing.saturationModifier = existing.saturationModifier * 1.10f;
-                existing.healthRegenModifier = 1.25f;
-            }
-
-            if (registry.equals("minecraft:golden_apple") || registry.equals("minecraft:enchanted_golden_apple")) {
-                existing.nutrition = 10;
-                existing.healthRegenModifier = 1.5f;
-            }
-
-//            if (registry.equals("minecraft:beetroot_soup")) {
-//                var effectConfig = new Common.MobEffectConfig();
-//                effectConfig.ID = BuiltInRegistries.MOB_EFFECT.getKey(MobEffects.MOVEMENT_SPEED).toString();
-//                existing.extraEffects.add(effectConfig);
-//            }
-
-            SOLValheim.Config.common.foodConfigs.put(item.arch$registryName().toString(), existing);
-        }
-
-        return existing;
+        return FoodConfigManager.get(item);
     }
-
 
     @ConfigEntry.Category("common")
     @ConfigEntry.Gui.TransitiveObject()
@@ -97,7 +49,7 @@ public class ModConfig extends PartitioningSerializer.GlobalData {
         @ConfigEntry.Gui.Tooltip() @Comment("Multiplier for health gained from food")
         public float nutritionHealthModifier = 1f;
 
-        @ConfigEntry.Gui.Tooltip() @Comment("Speed at which regeneration should occur")
+        @ConfigEntry.Gui.Tooltip() @Comment("Ticks between regeneration steps (lower is faster, minimum 1)")
         public int regenSpeedModifier = 5;
 
         @ConfigEntry.Gui.Tooltip() @Comment("Time in ticks that regeneration should wait after taking damage")
@@ -109,14 +61,35 @@ public class ModConfig extends PartitioningSerializer.GlobalData {
         @ConfigEntry.Gui.Tooltip() @Comment("Extra speed given when your hearts are full (0 to disable)")
         public float speedBoost = 0.20f;
 
+        @ConfigEntry.Gui.Tooltip() @Comment("Hearts from food required before the speed boost applies")
+        public int speedBoostMinHearts = 10;
+
         @ConfigEntry.Gui.Tooltip() @Comment("Number of hearts to start with")
         public int startingHealth = 3;
 
-        @ConfigEntry.Gui.Tooltip() @Comment("Number of food slots (range 2-5, default 3)")
+        @ConfigEntry.Gui.Tooltip() @Comment("Number of food slots (range 1-8, default 3)")
         public int maxSlots = 3;
 
         @ConfigEntry.Gui.Tooltip() @Comment("Percentage remaining before you can eat again")
         public float eatAgainPercentage = 0.2F;
+
+        @ConfigEntry.Gui.Tooltip() @Comment("Seconds of food left below which you can always eat again")
+        public int eatAgainMinSeconds = 60;
+
+        @ConfigEntry.Gui.Tooltip() @Comment("Shortest time in seconds any food can last")
+        public int minFoodSeconds = 300;
+
+        @ConfigEntry.Gui.Tooltip() @Comment("Require at least one food slot to be filled in order to sprint")
+        public boolean sprintRequiresFood = true;
+
+        @ConfigEntry.Gui.Tooltip() @Comment("Keep vanilla natural regeneration on top of the food based regeneration")
+        public boolean vanillaRegeneration = false;
+
+        @ConfigEntry.Gui.Tooltip() @Comment("Send the server food values to clients so tooltips and the hud always match the server")
+        public boolean syncFoodValuesToClients = true;
+
+        @ConfigEntry.Gui.Tooltip() @Comment("Write auto generated food values into this file so they can be edited by hand")
+        public boolean persistGeneratedFoodValues = true;
 
         @ConfigEntry.Gui.Tooltip() @Comment("Boost given to other foods when drinking")
         public float drinkSlotFoodEffectivenessBonus = 0.10F;
@@ -135,8 +108,41 @@ public class ModConfig extends PartitioningSerializer.GlobalData {
             Behaviours controlled by tags:
             #sol_valheim:resets_food - Resets all active food
             #sol_valheim:can_eat_early - Food that can be eaten prematurely. Note: Some food can be eaten early even without this tag.
+            #sol_valheim:not_consumable - Items that use the drinking animation but should not fill the drink slot
+
+            Datapacks win over this file. Drop json files at data/<namespace>/sol_valheim/food/<item>.json:
+            { "nutrition": 8, "saturationModifier": 1.0, "healthRegenModifier": 1.25, "time": 24000, "health": 8, "regen": 1.5,
+              "effects": [ { "id": "minecraft:speed", "duration": 0.5, "amplifier": 1 } ] }
         """)
         public LinkedHashMap<String, FoodConfig> foodConfigs = new LinkedHashMap<>();
+
+        /**
+         * Clamps every value into a range the game can actually run with. Without this a hand edited
+         * config could divide by zero in the regeneration tick or leave the player unable to eat.
+         */
+        @Override
+        public void validatePostLoad() {
+            defaultTimer = Mth.clamp(defaultTimer, 1, 60 * 60 * 24);
+            maxFoodHealth = Mth.clamp(maxFoodHealth, 1, 512);
+            nutritionHealthModifier = Mth.clamp(nutritionHealthModifier, 0f, 100f);
+            regenSpeedModifier = Mth.clamp(regenSpeedModifier, 1, 20 * 60);
+            regenDelay = Mth.clamp(regenDelay, 0, 20 * 60 * 60);
+            respawnGracePeriod = Mth.clamp(respawnGracePeriod, 0, 60 * 60);
+            speedBoost = Mth.clamp(speedBoost, 0f, 10f);
+            startingHealth = Mth.clamp(startingHealth, 1, maxFoodHealth);
+            speedBoostMinHearts = Mth.clamp(speedBoostMinHearts, 0, maxFoodHealth);
+            maxSlots = Mth.clamp(maxSlots, 1, ValheimFoodData.SLOT_LIMIT);
+            eatAgainPercentage = Mth.clamp(eatAgainPercentage, 0f, 1f);
+            eatAgainMinSeconds = Mth.clamp(eatAgainMinSeconds, 0, 60 * 60 * 24);
+            minFoodSeconds = Mth.clamp(minFoodSeconds, 1, 60 * 60 * 24);
+            drinkSlotFoodEffectivenessBonus = Mth.clamp(drinkSlotFoodEffectivenessBonus, -0.99f, 10f);
+
+            if (foodConfigs == null)
+                foodConfigs = new LinkedHashMap<>();
+
+            foodConfigs.values().removeIf(Objects::isNull);
+            foodConfigs.values().forEach(FoodConfig::validate);
+        }
 
         public static final class FoodConfig implements ConfigData {
             public int nutrition;
@@ -146,19 +152,49 @@ public class ModConfig extends PartitioningSerializer.GlobalData {
 
             public OverridesConfig overrides = null;
 
+            /** Duration in ticks. Always at least one tick, so callers can divide by it safely. */
             public int getTime() {
-                return (overrides != null && overrides.time != null) ?
-                        overrides.time : (int) Math.max(SOLValheim.Config.common.defaultTimer * 20 * saturationModifier * nutrition, 6000);
+                if (overrides != null && overrides.time != null)
+                    return Math.max(1, overrides.time);
+
+                var common = SOLValheim.Config.common;
+                return (int) Math.max(common.defaultTimer * 20L * saturationModifier * nutrition, common.minFoodSeconds * 20L);
             }
 
+            /** Health in half hearts. */
             public int getHearts() {
-                return (overrides != null && overrides.health != null) ?
-                         overrides.health : Math.round(Math.max(nutrition * SOLValheim.Config.common.nutritionHealthModifier, 2));
+                if (overrides != null && overrides.health != null)
+                    return Math.max(0, overrides.health);
+
+                return Math.round(Math.max(nutrition * SOLValheim.Config.common.nutritionHealthModifier, 2));
             }
 
             public float getHealthRegen() {
-                return (overrides != null && overrides.regen != null) ?
-                        overrides.regen: Mth.clamp(nutrition * 0.10f * healthRegenModifier,0.25f, 2f);
+                if (overrides != null && overrides.regen != null)
+                    return Math.max(0f, overrides.regen);
+
+                return Mth.clamp(nutrition * 0.10f * healthRegenModifier, 0.25f, 2f);
+            }
+
+            public void validate() {
+                nutrition = Mth.clamp(nutrition, 0, 1024);
+                saturationModifier = Mth.clamp(saturationModifier, 0f, 100f);
+                healthRegenModifier = Mth.clamp(healthRegenModifier, 0f, 100f);
+
+                if (extraEffects == null)
+                    extraEffects = new ArrayList<>();
+
+                extraEffects.removeIf(Objects::isNull);
+                for (var effect : extraEffects) {
+                    effect.duration = Mth.clamp(effect.duration, 0f, 100f);
+                    effect.amplifier = Mth.clamp(effect.amplifier, 1, 256);
+                }
+
+                if (overrides != null) {
+                    if (overrides.time != null) overrides.time = Math.max(1, overrides.time);
+                    if (overrides.health != null) overrides.health = Math.max(0, overrides.health);
+                    if (overrides.regen != null) overrides.regen = Math.max(0f, overrides.regen);
+                }
             }
 
             @Override
@@ -182,8 +218,9 @@ public class ModConfig extends PartitioningSerializer.GlobalData {
             @ConfigEntry.Gui.Tooltip() @Comment("Effect Level")
             public int amplifier = 1;
 
+            /** @return null for a blank, malformed or unknown effect id rather than throwing. */
             public MobEffect getEffect() {
-                return SOLValheim.MOB_EFFECTS.getRegistrar().get(new ResourceLocation(ID));
+                return RegistryHelper.getMobEffect(ID);
             }
         }
 
@@ -202,14 +239,30 @@ public class ModConfig extends PartitioningSerializer.GlobalData {
 
     @Config(name = "client")
     public static final class Client implements ConfigData {
+        @ConfigEntry.Gui.Tooltip @Comment("Show the food hud")
+        public boolean showFoodHud = true;
         @ConfigEntry.Gui.Tooltip @Comment("Enlarge the currently eaten food icons, small icons disable timer text")
         public boolean useLargeIcons = true;
+        @ConfigEntry.Gui.Tooltip @Comment("Show the remaining time on each food (requires large icons)")
+        public boolean showTimerText = true;
         @ConfigEntry.Gui.Tooltip @Comment("Position configuration for the root food hud")
         public FoodComponentConfig foodHudConfig = new FoodComponentConfig();
         @ConfigEntry.Gui.Tooltip @Comment("Show regen delay meter")
         public boolean showRegenMeter = true;
         @ConfigEntry.Gui.Tooltip @Comment("Position configuration for the regen indicator")
         public RegenComponentConfig regenHudConfig = new RegenComponentConfig();
+
+        @Override
+        public void validatePostLoad() {
+            if (foodHudConfig == null)
+                foodHudConfig = new FoodComponentConfig();
+            if (regenHudConfig == null)
+                regenHudConfig = new RegenComponentConfig();
+            if (foodHudConfig.slotOffsets == null)
+                foodHudConfig.slotOffsets = new ArrayList<>();
+
+            foodHudConfig.slotOffsets.removeIf(Objects::isNull);
+        }
 
         public static class RegenComponentConfig {
             @ConfigEntry.Gui.Tooltip @Comment("X position offset in scaled pixels")

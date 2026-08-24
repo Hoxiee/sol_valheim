@@ -5,7 +5,6 @@ import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.*;
 import dev.architectury.event.events.client.ClientGuiEvent;
 import dev.architectury.platform.Platform;
-import me.shedaniel.autoconfig.ConfigData;
 import net.minecraft.client.Minecraft;
 
 #if PRE_CURRENT_MC_1_19_2
@@ -30,13 +29,15 @@ import org.joml.Vector3f;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.util.FastColor;
 import net.minecraft.util.Mth;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
-import net.minecraft.world.item.UseAnim;
 import vice.sol_valheim.accessors.PlayerEntityMixinDataAccessor;
 import vice.sol_valheim.mixin.LivingEntityDamageAccessor;
+import vice.sol_valheim.utils.RegistryHelper;
 
 import java.util.List;
+import java.util.Locale;
 
 public class FoodHUD implements ClientGuiEvent.RenderHud
 {
@@ -63,9 +64,26 @@ public class FoodHUD implements ClientGuiEvent.RenderHud
     private static final int YELLOW_BG = FastColor.ARGB32.color(150, 255, 200, 37);
     private static final int RED = FastColor.ARGB32.color(255, 237, 57, 57);
 
+    /**
+     * Farmer's Delight replaces the cake item with a slice when a piece is eaten. Resolved once and
+     * remembered - the old code hit the item registry once per slot per frame.
+     */
+    private static Item cakeSliceItem;
+    private static boolean cakeSliceResolved;
+
     public FoodHUD() {
         ClientGuiEvent.RENDER_HUD.register(this);
         client = Minecraft.getInstance();
+    }
+
+    private static Item farmersDelightCakeSlice() {
+        if (!cakeSliceResolved) {
+            cakeSliceResolved = true;
+            if (Platform.isModLoaded("farmersdelight"))
+                cakeSliceItem = RegistryHelper.getItem("farmersdelight:cake_slice");
+        }
+
+        return cakeSliceItem;
     }
 
     @Override
@@ -74,6 +92,9 @@ public class FoodHUD implements ClientGuiEvent.RenderHud
             return;
 
         if (client.player.isCreative() || client.player.isSpectator())
+            return;
+
+        if (SOLValheim.Config == null || !SOLValheim.Config.client.showFoodHud)
             return;
 
         var solPlayer = (PlayerEntityMixinDataAccessor) client.player;
@@ -87,8 +108,8 @@ public class FoodHUD implements ClientGuiEvent.RenderHud
         ModConfig.Client.RegenComponentConfig regenHudConfig = configData.regenHudConfig;
 
         // Health regen timer
-        if (configData.showRegenMeter) {
-            var level = client.level;
+        var level = client.level;
+        if (configData.showRegenMeter && level != null) {
             var timeSinceHurt = level.getGameTime() - ((LivingEntityDamageAccessor) client.player).getLastDamageStamp();
             if (timeSinceHurt < SOLValheim.Config.common.regenDelay) {
                 int width = (int) ((client.getWindow().getGuiScaledWidth() * regenHudConfig.xAnchor) + regenHudConfig.xOffset);
@@ -111,7 +132,7 @@ public class FoodHUD implements ClientGuiEvent.RenderHud
             offset++;
         }
         // Empty Food
-        for (int i = 0; i < foodData.MaxItemSlots - foodData.ItemEntries.size(); i++) {
+        for (int i = 0; i < foodData.getMaxItemSlots() - foodData.ItemEntries.size(); i++) {
             renderEmptyFoodSlot(graphics, offset, useLargeIcons, EMPTY_LARGE_SPRITE, EMPTY_SPRITE, FOOD_LARGE_SPRITE, FOOD_SPRITE, size, width, height, WHITE);
             offset++;
         }
@@ -130,8 +151,12 @@ public class FoodHUD implements ClientGuiEvent.RenderHud
 
         ModConfig.Client configData = SOLValheim.Config.client;
         ModConfig.Client.FoodComponentConfig foodHudConfig = configData.foodHudConfig;
-        int startWidth = width + ((size + 1) * foodHudConfig.xGap * (offset));
-        int startHeight = height + ((size + 1) * foodHudConfig.yGap * (offset));
+        // the filled slots have always applied these, the empty ones used to ignore them and drift
+        var slotHudConfigs = foodHudConfig.slotOffsets;
+        var slotHudConfig = slotHudConfigs.size() >= offset ? slotHudConfigs.get(offset - 1) : null;
+
+        int startWidth = width + ((size + 1) * foodHudConfig.xGap * (offset)) + (slotHudConfig != null ? slotHudConfig.xOffset : 0);
+        int startHeight = height + ((size + 1) * foodHudConfig.yGap * (offset)) + (slotHudConfig != null ? slotHudConfig.yOffset : 0);
 
         blit(graphics, currentPanelSprite, size, size, startWidth, startHeight, color);
         blit(graphics, currentIconSprite, size, size, startWidth, startHeight, color);
@@ -139,17 +164,23 @@ public class FoodHUD implements ClientGuiEvent.RenderHud
 
     private static void renderFoodSlot(#if PRE_CURRENT_MC_1_19_2 PoseStack #elif POST_CURRENT_MC_1_20_1 GuiGraphics #endif graphics, ValheimFoodData.EatenFoodItem food, int width, int size, int offset, int height, boolean useLargeIcons)
     {
-        var foodConfig = ModConfig.getFoodConfig(food.item);
-        if (foodConfig == null)
+        if (food.item == null)
             return;
+
+        // a food whose values went away - mod removed, datapack edited - still gets its slot drawn,
+        // otherwise every icon to the left of it would jump across the screen
+        var foodConfig = ModConfig.getFoodConfig(food.item);
+        var totalTime = foodConfig != null ? foodConfig.getTime() : Math.max(1, food.ticksLeft);
+        var effectCount = foodConfig != null ? foodConfig.extraEffects.size() : 0;
+
         ModConfig.Client configData = SOLValheim.Config.client;
         ModConfig.Client.FoodComponentConfig foodHudConfig = configData.foodHudConfig;
         List<ModConfig.Client.SlotComponentConfig> slotHudConfigs = foodHudConfig.slotOffsets;
         ModConfig.Client.SlotComponentConfig slotHudConfig = slotHudConfigs.size() >= offset ? slotHudConfigs.get(offset - 1) : null;
 
-        var isDrink = food.item.getDefaultInstance().getUseAnimation() == UseAnim.DRINK;
+        var isDrink = ValheimFoodData.isDrinkable(food.item);
         boolean canEat = food.canEatEarly();
-        float ticksLeftPercent = Float.min(1.0F, (float) food.ticksLeft / foodConfig.getTime());
+        float ticksLeftPercent = Mth.clamp((float) food.ticksLeft / totalTime, 0.0F, 1.0F);
 
         int xOffset = (slotHudConfig != null) ? slotHudConfig.xOffset : 0;
         int yOffset = (slotHudConfig != null) ? slotHudConfig.yOffset : 0;
@@ -170,7 +201,7 @@ public class FoodHUD implements ClientGuiEvent.RenderHud
             isSeconds = true;
             time =  (float) food.ticksLeft / 20;
         }
-        var minutes = String.format("%.0f", time);
+        var minutes = String.format(Locale.ROOT, "%.0f", time);
 
         var pose = #if PRE_CURRENT_MC_1_19_2 graphics #elif POST_CURRENT_MC_1_20_1 graphics.pose() #endif;
 
@@ -192,33 +223,27 @@ public class FoodHUD implements ClientGuiEvent.RenderHud
         pose.scale(scale, scale, scale);
         pose.translate(startWidth * (useLargeIcons ? 0.3333f : 1f), startHeight * (useLargeIcons ? 0.3333f : 1f), 0f);
 
-        if (food.item == Items.CAKE && Platform.isModLoaded("farmersdelight")) {
-            var cakeSlice = SOLValheim.ITEMS.getRegistrar().get(new ResourceLocation("farmersdelight:cake_slice"));
-            renderGUIItem(graphics, new ItemStack(cakeSlice == null ? food.item : cakeSlice, 1), startWidth + 1, height + 1);
-        }
-        else {
-            renderGUIItem(graphics, new ItemStack(food.item, 1), startWidth + 1, startHeight + 1);
+        var displayItem = food.item;
+        if (displayItem == Items.CAKE) {
+            var slice = farmersDelightCakeSlice();
+            if (slice != null)
+                displayItem = slice;
         }
 
+        // startHeight, not height: the cake branch used to ignore the row offset and drew off place
+        renderGUIItem(graphics, new ItemStack(displayItem, 1), startWidth + 1, startHeight + 1);
+
         // Text
-        if (useLargeIcons) {
+        if (useLargeIcons && (configData.showTimerText || effectCount > 0)) {
             pose.pushPose(); // Text
             pose.translate(0.0f, 0.0f, 200.0f);
-            drawFont(graphics, minutes, startWidth + (minutes.length() > 1 ? 6 : 12), startHeight + 10, isSeconds ? RED : WHITE);
-            if (!foodConfig.extraEffects.isEmpty())
-                drawFont(graphics, "+" + foodConfig.extraEffects.size(), startWidth + 6, startHeight, YELLOW);
+            if (configData.showTimerText)
+                drawFont(graphics, minutes, startWidth + (minutes.length() > 1 ? 6 : 12), startHeight + 10, isSeconds ? RED : WHITE);
+            if (effectCount > 0)
+                drawFont(graphics, "+" + effectCount, startWidth + 6, startHeight, YELLOW);
             pose.popPose(); // Text
         }
         pose.popPose(); // Item/Text
-    }
-
-    private static void fill(#if PRE_CURRENT_MC_1_19_2 PoseStack #elif POST_CURRENT_MC_1_20_1 GuiGraphics #endif graphics, int width, int height, int x, int y, int color)
-    {
-        #if PRE_CURRENT_MC_1_19_2
-        GuiComponent.fill(graphics, width, height, x, y, color);
-        #elif POST_CURRENT_MC_1_20_1
-        graphics.fill(width, height, x, y, color);
-        #endif
     }
 
     private static void blit(#if PRE_CURRENT_MC_1_19_2 PoseStack #elif POST_CURRENT_MC_1_20_1 GuiGraphics #endif graphics, String texture, int width, int height, int x, int y, int color) {

@@ -4,9 +4,16 @@
   "version": "${version}",
   "name": "${display_name}",
 
-  "description": "",
-  "authors": [],
-  "contact": {},
+  "description": "Valheim style food. Eat up to three different dishes at a time, each one adding hearts and health regeneration for as long as it lasts, instead of filling a hunger bar. Food values are generated for every item in the pack and can be overridden per item from the config or from a datapack.",
+  "authors": [
+    "anthxnymc",
+    "Hoxiee"
+  ],
+  "contact": {
+    "homepage": "https://modrinth.com/mod/sol-valheim",
+    "sources": "https://github.com/anthxnymc/sol_valheim",
+    "issues": "https://github.com/anthxnymc/sol_valheim/issues"
+  },
 
   "license": "GNU LGPL 3.0",
   "icon": "icon.png",
@@ -27,6 +34,8 @@
   "depends": {
     "minecraft": "${minecraft_version}",
     "fabricloader": ">=${fabric}",
-    "fabric-api": ">=${fabric_api}"
+    "fabric-api": ">=${fabric_api}",
+    "architectury": "*",
+    "cloth-config": "*"
   }
 }

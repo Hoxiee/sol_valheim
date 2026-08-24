@@ -11,5 +11,7 @@
   "tooltip.sol_valheim.duration.plural_other": "⌚ %s Minutes",
   "tooltip.sol_valheim.refreshing": "❄ Refreshing! Can be consumed anytime!",
   "tooltip.sol_valheim.effect": "★ %s",
-  "tooltip.sol_valheim.consume": "⌛ Can be consumed anytime!"
+  "tooltip.sol_valheim.consume": "⌛ Can be consumed anytime!",
+  "commands.sol_valheim.cleared": "Cleared food for %s player(s)",
+  "commands.sol_valheim.reloaded": "Reloaded SOL: Valheim - %s food entries resolved"
 }

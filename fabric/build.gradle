@@ -25,6 +25,9 @@ sourceSets {
     }
 }
 
+// captured out here: inside the loom extension the closure delegate is not the project
+String datagenModId = rootProject.modid
+
 loom {
     Project common = project(":common")
 
@@ -35,8 +38,7 @@ loom {
             name "Minecraft Data"
             vmArg "-Dfabric-api.datagen"
             vmArg "-Dfabric-api.datagen.output-dir=${common.file("src/generated/resources")}"
-            vmArg "-Dfabric-api.datagen.modid=logic_n_control"
-            vmArg "-Dporting_lib.datagen.existing_resources=${common.file("src/main/resources")}"
+            vmArg "-Dfabric-api.datagen.modid=${datagenModId}"
 
             environmentVariable("DATAGEN", "TRUE")
         }

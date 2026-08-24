@@ -11,5 +11,7 @@
   "tooltip.sol_valheim.duration.plural_other": "⌚ %s Минут",
   "tooltip.sol_valheim.refreshing": "❄ Освежает! Можно употреблять в любое время!",
   "tooltip.sol_valheim.effect": "★ %s",
-  "tooltip.sol_valheim.consume": "⌛ Можно употреблять в любое время!"
+  "tooltip.sol_valheim.consume": "⌛ Можно употреблять в любое время!",
+  "commands.sol_valheim.cleared": "Еда сброшена, игроков: %s",
+  "commands.sol_valheim.reloaded": "SOL: Valheim перезагружен - записей о еде: %s"
 }
