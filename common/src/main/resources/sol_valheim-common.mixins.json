@@ -9,6 +9,7 @@
     "ItemMixin",
     "LivingEntityDamageAccessor",
     "PlayerEntityMixin",
+    "RecipeManagerMixin",
     "ServerLevelMixin",
     "ServerPlayerMixin",
     "SynchedEntityDataMixin"

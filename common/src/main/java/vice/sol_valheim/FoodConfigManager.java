@@ -21,6 +21,7 @@ import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Owns the resolved food values for every item in the game.
@@ -31,6 +32,10 @@ import java.util.Map;
  *   <li>hand written entries in the {@code foodConfigs} block of the common config</li>
  *   <li>values generated from the item's vanilla {@link FoodProperties}</li>
  * </ol>
+ * Whichever source wins supplies the raw inputs; hearts, duration and regeneration then come out of
+ * {@link FoodBalance}, unless the entry pins them outright with an {@code overrides} block. See
+ * {@link #rebuild()} for why balanced values are never persisted back into the config.
+ * <p>
  * The resolved table is rebuilt as a whole and published as an immutable snapshot, so lookups from
  * the render thread and from the tooltip callback never see a half built map and never mutate one.
  * The old behaviour - generating a config entry inside the getter - could and did write to a shared
@@ -46,6 +51,20 @@ public final class FoodConfigManager
 
     /** Overrides read from datapacks on the last reload. */
     private static volatile Map<Item, ModConfig.Common.FoodConfig> datapackEntries = Collections.emptyMap();
+
+    /** Crafting effort measured for each food on the last rebuild. Read by {@code /solvalheim balance}. */
+    private static volatile Map<Item, FoodEffort.Effort> lastEfforts = Collections.emptyMap();
+
+    /** Items whose values did not come from the balance model on the last rebuild. */
+    private static volatile Set<Item> lastUnbalanced = Collections.emptySet();
+
+    /**
+     * Bumped whenever generated values need regenerating rather than reusing. 1 dropped the hardcoded
+     * Farmer's Delight bump and 2 the hardcoded golden apple one, both of which were baked straight
+     * into the persisted numbers - they are the model's inputs, so leaving them in place would have the
+     * new model read someone else's thumb on the scale as the item's own strength.
+     */
+    private static final int CURRENT_FOOD_CONFIG_VERSION = 2;
 
     private FoodConfigManager() {}
 
@@ -71,6 +90,24 @@ public final class FoodConfigManager
         return localCache;
     }
 
+    /** Crafting effort per food from the last rebuild. Diagnostic only, for {@code /solvalheim balance}. */
+    public static Map<Item, FoodEffort.Effort> efforts() {
+        return lastEfforts;
+    }
+
+    /**
+     * Items whose values did not come from the balance model on the last rebuild. Every
+     * food when {@code balanceFoodValues} is off. Diagnostic only, for {@code /solvalheim balance}.
+     */
+    public static Set<Item> unbalancedEntries() {
+        return lastUnbalanced;
+    }
+
+    /** True when {@code item}'s raw inputs currently come from a datapack override. */
+    public static boolean isDatapackSourced(Item item) {
+        return item != null && datapackEntries.containsKey(item);
+    }
+
     public static void setSynced(Map<Item, ModConfig.Common.FoodConfig> entries) {
         syncedCache = entries == null ? null : Collections.unmodifiableMap(entries);
     }
@@ -87,15 +124,31 @@ public final class FoodConfigManager
     /**
      * Rebuilds the whole table from the current config plus the last datapack reload. Cheap enough to
      * run on world load and on {@code /solvalheim reload}; roughly one pass over the item registry.
+     * <p>
+     * Balanced values are written into <em>copies</em> and published only here - never back into
+     * {@code foodConfigs}. Persisting them would make the next rebuild read them as authored, pinned
+     * values, so nothing would ever rebalance after a new mod was installed or a recipe changed.
      */
     public static synchronized void rebuild() {
+        rebuild("manual");
+    }
+
+    /** The source names the trigger in the log line, which is how pricing-order bugs get diagnosed. */
+    public static synchronized void rebuild(String trigger) {
         var config = SOLValheim.Config;
         if (config == null)
             return;
 
-        var overrides = datapackEntries;
+        var common = config.common;
+        var migrated = migrate(common);
+
+        var datapack = datapackEntries;
         Map<Item, ModConfig.Common.FoodConfig> resolved = new IdentityHashMap<>(1024);
         Map<String, ModConfig.Common.FoodConfig> generated = new LinkedHashMap<>();
+
+        Map<Item, FoodEffort.Effort> efforts = new IdentityHashMap<>(1024);
+        Set<Item> unbalanced = Collections.newSetFromMap(new IdentityHashMap<>());
+        var balanced = 0;
 
         for (var item : RegistryHelper.allItems()) {
             if (!isFoodLike(item))
@@ -106,25 +159,154 @@ public final class FoodConfigManager
                 continue;
 
             var key = id.toString();
-            var entry = config.common.foodConfigs.get(key);
+
+            // the config keeps an entry for every food even when a datapack currently wins, so the
+            // file stays a complete record of what is installed
+            var entry = common.foodConfigs.get(key);
             if (entry == null) {
                 entry = generateDefault(item, id);
                 generated.put(key, entry);
             }
 
-            var override = overrides.get(item);
-            resolved.put(item, override != null ? override : entry);
+            // a datapack replaces the raw inputs and still feeds the same model; only the explicit
+            // time/health/regen block skips it, which is exactly what "set the value outright" means
+            var override = datapack.get(item);
+            var source = override != null ? override : entry;
+
+            // recorded even for pinned dishes, so the audit command can say what a pin is overruling
+            var effort = FoodEffort.of(item);
+            efforts.put(item, effort);
+
+            // nothing left to decide, or the model is off
+            if (!common.balanceFoodValues || source.isFullyPinned()) {
+                resolved.put(item, source);
+                unbalanced.add(item);
+                continue;
+            }
+
+            var multiplier = FoodEffort.multiplier(effort, common.balanceEffortWeight);
+
+            var copy = source.copy();
+            FoodBalance.applyTo(copy, FoodBalance.shape(source, common.balancePivot, multiplier), common);
+            resolved.put(item, copy);
+            balanced++;
         }
 
         localCache = Collections.unmodifiableMap(resolved);
+        lastEfforts = Collections.unmodifiableMap(efforts);
+        lastUnbalanced = Collections.unmodifiableSet(unbalanced);
 
-        if (!generated.isEmpty() && config.common.persistGeneratedFoodValues) {
-            config.common.foodConfigs.putAll(generated);
+        var persisting = !generated.isEmpty() && common.persistGeneratedFoodValues;
+        if (persisting)
+            common.foodConfigs.putAll(generated);
+
+        if (persisting || migrated) {
             AutoConfig.getConfigHolder(ModConfig.class).save();
-            SOLValheim.LOGGER.info("[sol_valheim] Wrote {} newly generated food values to the config", generated.size());
+
+            if (persisting)
+                SOLValheim.LOGGER.info("[sol_valheim] Wrote {} newly generated food values to the config", generated.size());
         }
 
-        SOLValheim.LOGGER.info("[sol_valheim] Resolved food values for {} items ({} from datapacks)", resolved.size(), overrides.size());
+        SOLValheim.LOGGER.info("[sol_valheim] Resolved food values for {} items ({} from datapacks, {} balanced, "
+                        + "{} craftable items priced) via {}", resolved.size(), datapack.size(), balanced,
+                FoodEffort.index().size(), trigger);
+    }
+
+    /**
+     * Drops generated entries written under an older scheme so this rebuild can replace them.
+     * <p>
+     * Needed because the old generators baked their thumb on the scale straight into the persisted
+     * numbers: Farmer's Delight nutrition times 1.25 ({@code nutrition: 17} rather than 14), and the
+     * golden apple written down as nutrition 10 rather than its actual 4. Those numbers are the model's
+     * <em>inputs</em>, so leaving them in place would have the new model read a removed hardcode as the
+     * item's genuine strength, and the inflation would outlive the code that caused it.
+     * <p>
+     * The config records no provenance, so "did we write this or did a human?" is answered by comparing
+     * against what the old generator would have produced - see {@link #legacyDefault}. Anything that
+     * differs is left strictly alone.
+     * <p>
+     * {@code legacyDefault} reproduces both hardcodes at once, which means a schema 1 config's Farmer's
+     * Delight entries do not match it and survive. That is fine rather than lucky: schema 1 already
+     * dropped that bump, so those entries hold the item's real values and are exactly what would be
+     * regenerated in their place.
+     *
+     * @return true when the config was changed and needs saving
+     */
+    private static boolean migrate(ModConfig.Common common) {
+        if (common.foodConfigVersion >= CURRENT_FOOD_CONFIG_VERSION)
+            return false;
+
+        var dropped = 0;
+        var iterator = common.foodConfigs.entrySet().iterator();
+        while (iterator.hasNext()) {
+            var entry = iterator.next();
+            var item = RegistryHelper.getItem(entry.getKey());
+
+            // the mod that owned it is not installed right now; the entry is harmless and might come
+            // back, and we cannot tell whether it was generated without its FoodProperties
+            if (item == null)
+                continue;
+
+            if (!matchesLegacyDefault(entry.getValue(), item, RegistryHelper.parse(entry.getKey())))
+                continue;
+
+            iterator.remove();
+            dropped++;
+        }
+
+        common.foodConfigVersion = CURRENT_FOOD_CONFIG_VERSION;
+        SOLValheim.LOGGER.info("[sol_valheim] Food config upgraded to schema {}: dropped {} untouched generated "
+                + "entries, regenerating them now (hand edited entries were kept)", CURRENT_FOOD_CONFIG_VERSION, dropped);
+        return true;
+    }
+
+    /** True when {@code entry} looks exactly like something the pre balance generator wrote. */
+    private static boolean matchesLegacyDefault(ModConfig.Common.FoodConfig entry, Item item, ResourceLocation id) {
+        if (entry == null || id == null)
+            return false;
+
+        // pinned values or extra effects are hand authored by definition - the generator wrote neither
+        if (entry.overrides != null)
+            return false;
+
+        if (entry.extraEffects != null && !entry.extraEffects.isEmpty())
+            return false;
+
+        var legacy = legacyDefault(item, id);
+        return entry.nutrition == legacy.nutrition
+                && near(entry.saturationModifier, legacy.saturationModifier)
+                && near(entry.healthRegenModifier, legacy.healthRegenModifier);
+    }
+
+    /** Saturation round trips through json as 0.30000001192092896, so exact equality is no use. */
+    private static boolean near(float a, float b) {
+        return Math.abs(a - b) <= 1e-4f;
+    }
+
+    /**
+     * Reproduces the old generators, hardcodes included. Migration only: it exists to recognise the
+     * mod's own past output, not to produce values. Delete once the schema version has been in the wild
+     * long enough that no unmigrated config is left.
+     */
+    private static ModConfig.Common.FoodConfig legacyDefault(Item item, ResourceLocation id) {
+        var config = generateDefault(item, id);
+
+        // schema 0 and 1 both wrote the golden apple down as nutrition 10 - four times what the item
+        // actually carries - to force it above every other snack
+        if (item == Items.GOLDEN_APPLE || item == Items.ENCHANTED_GOLDEN_APPLE) {
+            config.nutrition = 10;
+            config.healthRegenModifier = 1.5f;
+        }
+
+        // schema 0 only
+        if (id.getNamespace().equals("farmersdelight") || id.getNamespace().startsWith("farmers")) {
+            config.nutrition = (int) (config.nutrition * 1.25f);
+            config.saturationModifier = config.saturationModifier * 1.10f;
+            config.healthRegenModifier = 1.25f;
+        }
+
+        config.validate();
+        return config;
     }
 
     /**
@@ -139,49 +321,106 @@ public final class FoodConfigManager
         if (item == Items.CAKE)
             return true;
 
+        // eating became component-driven in 1.21
+        #if PRE_CURRENT_MC_1_20_1
         if (item.isEdible())
             return true;
+        #else
+        if (item.getDefaultInstance().has(net.minecraft.core.component.DataComponents.FOOD))
+            return true;
+        #endif
 
         return ValheimFoodData.isDrinkable(item);
+    }
+
+    /**
+     * The item's own food values, or null when it has none. Cake gets the same synthetic values on
+     * every target - it is eaten off the block, so its item-side component is beside the point.
+     */
+    private static FoodProperties foodPropertiesOf(Item item) {
+        // Item#getFoodProperties went away along with everything else that moved to components
+        #if PRE_CURRENT_MC_1_20_1
+        return item == Items.CAKE
+                ? new FoodProperties.Builder().nutrition(10).saturationMod(0.7f).build()
+                : item.getFoodProperties();
+        #else
+        if (item == Items.CAKE)
+            return new FoodProperties(10, 7f, false, 1.6f, java.util.Optional.empty(), java.util.List.of());
+
+        return item.getDefaultInstance().get(net.minecraft.core.component.DataComponents.FOOD);
+        #endif
     }
 
     private static ModConfig.Common.FoodConfig generateDefault(Item item, ResourceLocation id) {
         var config = new ModConfig.Common.FoodConfig();
 
-        FoodProperties food = item == Items.CAKE
-                ? new FoodProperties.Builder().nutrition(10).saturationMod(0.7f).build()
-                : item.getFoodProperties();
+        var food = foodPropertiesOf(item);
 
         // Drinks are not edible, so they have no vanilla food properties to read. Edible drinks -
         // honey bottles, most modded juices - keep their own values instead of being flattened.
         if (food == null) {
             var path = id.getPath();
+            // the newer constructor takes absolute saturation; these build the same values the old
+            // builder expressed as nutrition x modifier
+            #if PRE_CURRENT_MC_1_20_1
             if (item instanceof PotionItem || path.contains("potion"))
                 food = new FoodProperties.Builder().nutrition(4).saturationMod(0.75f).build();
             else if (item instanceof MilkBucketItem || path.contains("milk"))
                 food = new FoodProperties.Builder().nutrition(6).saturationMod(1f).build();
             else
                 food = new FoodProperties.Builder().nutrition(2).saturationMod(0.5f).build();
+            #else
+            if (item instanceof PotionItem || path.contains("potion"))
+                food = new FoodProperties(4, 3f, false, 1.6f, java.util.Optional.empty(), java.util.List.of());
+            else if (item instanceof MilkBucketItem || path.contains("milk"))
+                food = new FoodProperties(6, 6f, false, 1.6f, java.util.Optional.empty(), java.util.List.of());
+            else
+                food = new FoodProperties(2, 1f, false, 1.6f, java.util.Optional.empty(), java.util.List.of());
+            #endif
         }
 
-        config.nutrition = food.getNutrition();
-        config.saturationModifier = food.getSaturationModifier();
+        config.nutrition = getNutrition(food);
+        config.saturationModifier = getSaturationModifier(food);
         config.healthRegenModifier = 1f;
 
-        // Farmer's Delight style cooked meals are meant to beat their raw ingredients
-        if (id.getNamespace().equals("farmersdelight") || id.getNamespace().startsWith("farmers")) {
-            config.nutrition = (int) (config.nutrition * 1.25f);
-            config.saturationModifier = config.saturationModifier * 1.10f;
-            config.healthRegenModifier = 1.25f;
-        }
-
-        if (item == Items.GOLDEN_APPLE || item == Items.ENCHANTED_GOLDEN_APPLE) {
-            config.nutrition = 10;
+        // No per mod special cases here on purpose. "Cooked meals should beat their ingredients" is
+        // measured rather than asserted - see FoodEffort.
+        //
+        // The golden apples are the one exception, and only on the axis their reputation actually comes
+        // from. They used to be written down as nutrition 10 against the 4 the item really carries,
+        // which put a two ingredient snack above every cooked meal in the game; that is gone. What is
+        // left says a golden apple heals fast, not that it feeds you well, and it costs the dish
+        // duration and hearts to say it - the budget is conserved.
+        if (item == Items.GOLDEN_APPLE)
             config.healthRegenModifier = 1.5f;
-        }
+        else if (item == Items.ENCHANTED_GOLDEN_APPLE)
+            config.healthRegenModifier = 2.0f;
 
         config.validate();
         return config;
+    }
+
+    /** {@code FoodProperties} is a plain record from 1.20.5, so the getters differ by target. */
+    private static int getNutrition(FoodProperties food) {
+        #if PRE_CURRENT_MC_1_20_1
+        return food.getNutrition();
+        #else
+        return food.nutrition();
+        #endif
+    }
+
+    /**
+     * The saturation <em>modifier</em> the balance model expects. 1.20.5 stores absolute saturation
+     * instead (nutrition x modifier), so the modifier is derived back out - a zero nutrition food
+     * keeps its raw saturation as the modifier rather than dividing by nothing.
+     */
+    private static float getSaturationModifier(FoodProperties food) {
+        #if PRE_CURRENT_MC_1_20_1
+        return food.getSaturationModifier();
+        #else
+        var nutrition = Math.max(1, food.nutrition());
+        return food.saturation() / nutrition;
+        #endif
     }
 
     private static ModConfig.Common.FoodConfig parse(JsonObject json) {
@@ -245,7 +484,7 @@ public final class FoodConfigManager
             }
 
             datapackEntries = Collections.unmodifiableMap(parsed);
-            rebuild();
+            rebuild("datapack reload");
         }
     }
 }
