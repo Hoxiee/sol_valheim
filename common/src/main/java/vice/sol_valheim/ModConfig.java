@@ -238,7 +238,7 @@ public class ModConfig extends PartitioningSerializer.GlobalData {
             Cost is distinct ingredients plus how deep the recipe tree goes, so a pot meal of five things
             outclasses a steak on a fire. At 0 a steak and a stew with the same nutrition are equal.
         """)
-        public float balanceEffortWeight = 1.0F;
+        public float balanceEffortWeight = 0.3F;
 
         @ConfigEntry.Gui.Tooltip() @Comment("Schema version of the generated values below - managed by the mod, do not edit")
         public int foodConfigVersion = 0;
