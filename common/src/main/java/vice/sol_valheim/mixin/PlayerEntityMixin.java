@@ -25,7 +25,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import vice.sol_valheim.AdvancementHelper;
 import vice.sol_valheim.ModConfig;
-import vice.sol_valheim.RestedManager;
 import vice.sol_valheim.SOLValheim;
 import vice.sol_valheim.SOLValheimClient;
 import vice.sol_valheim.ValheimFoodData;
@@ -313,13 +312,6 @@ public abstract class PlayerEntityMixin extends LivingEntity implements PlayerEn
 
             player.heal(regenSpeed / 20f);
         }
-
-        // a roof does not move, so the shelter scan runs on a throttle, not every tick
-        if (config.restedEnabled
-                && !player.isCreative()
-                && player.tickCount % RestedManager.SCAN_INTERVAL == 0
-                && RestedManager.isShelteredByFire(player))
-            RestedManager.topUp(player);
     }
 
     /**

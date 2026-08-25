@@ -77,9 +77,10 @@ same as the sprint rule.
 
 **Sleeping** runs food down for the whole skipped night, so you cannot sleep away a hunger problem —
 but it also grants **Rested**: a status effect that multiplies your food regeneration (×1.5 by
-default, `restedRegenMultiplier`) for eight minutes (`restedDurationSeconds`). Waking up from a full
-night also restores your health to its current maximum (`healFullOnSleep`). Standing under a roof
-within a few blocks of open fire tops the timer back up while you stay put, Valheim-campfire style.
+default, `restedRegenMultiplier`) for eight minutes (`restedDurationSeconds`). Rested is only
+awarded for the full Valheim ritual: the bed has to sit under a roof with fire burning within a few
+blocks — sleep anywhere else and you wake up just as tired. Waking up from a full
+night also restores your health to its current maximum (`healFullOnSleep`).
 The effect icon and its countdown are vanilla's own; `restedEnabled` turns the whole thing off.
 
 ## Food values
@@ -279,8 +280,8 @@ cannot run.
 | `foodDecayStartFraction` | 0.5 | `LATE` mode: fraction of the dish's lifetime below which its hearts begin to fade. |
 | `foodDecayMinFraction` | 0.25 | Fraction of its hearts a dish still gives at the moment it expires. |
 | `passTicksDuringNight` | true | Run food down across a skipped night. |
-| `restedEnabled` | true | Grant the Rested effect for sleeping and sheltering by fire. |
-| `restedDurationSeconds` | 480 | Seconds of Rested per grant; sheltering tops up to this. |
+| `restedEnabled` | true | Grant the Rested effect for sleeping in a bed under a roof, near fire. |
+| `restedDurationSeconds` | 480 | Seconds of Rested per grant. |
 | `restedRegenMultiplier` | 1.5 | Food regeneration multiplier while Rested. |
 | `vanillaRegeneration` | false | Keep vanilla natural regeneration as well. |
 | `syncFoodValuesToClients` | true | Send resolved values to clients so HUD and tooltips match the server. |
@@ -309,8 +310,8 @@ work around another mod's HUD.
 ## Advancements
 
 A small built-in tree, awarded by the mod itself: **SOL: Valheim** (root) → **First Meal** (eat a
-dish) → **Full Table** (all food slots filled at once) and **Rested** (sleep through a night or
-shelter by a fire), plus **Refreshed** (fill the drink slot). No rewards attached - a pack can
+dish) → **Full Table** (all food slots filled at once) and **Rested** (sleep through a night in a
+bed under a roof, near a fire), plus **Refreshed** (fill the drink slot). No rewards attached - a pack can
 extend or replace the JSONs at `data/sol_valheim/advancements/` freely.
 
 ## Using this in a modpack

@@ -11,18 +11,13 @@ import net.minecraft.world.level.levelgen.Heightmap;
 /**
  * Grants and maintains the {@link RestedEffect}.
  * <p>
- * Two ways to earn it, both topping the timer up to the same configured duration: sleeping through
- * a night (the big one), and standing under a roof within smelling distance of fire - Valheim's
- * "sheltered by the campfire" comfort without its sitting requirement.
- * <p>
- * The effect is applied ambient: no swirl particles on grant or refresh, just the inventory icon
- * with its timer - noticing you are Rested should not compete with noticing a skeleton.
+ * The only way to earn it is sleeping through a night in a bed that sits under a roof with fire
+ * burning nearby - Valheim's full rest ritual, bed and shelter and campfire together. The effect
+ * is applied ambient: no swirl particles on grant or refresh, just the inventory icon with its
+ * timer - noticing you are Rested should not compete with noticing a skeleton.
  */
 public final class RestedManager
 {
-    /** Server ticks between shelter checks - a roof does not move, no need to ask every tick. */
-    public static final int SCAN_INTERVAL = 40;
-
     /** Horizontal/vertical reach of the fire scan around the player's feet. */
     private static final int FIRE_RADIUS = 4;
 
@@ -50,8 +45,10 @@ public final class RestedManager
     }
 
     /**
-     * True when the player stands under something solid with open flame nearby - the standing
-     * equivalent of Valheim's resting by a campfire. The roof check is one heightmap lookup, so it
+     * True when the player rests under something solid with open flame nearby - the sleep-time
+     * eligibility test for {@link RestedEffect}. A bed counts as motion blocking for the heightmap,
+     * so for a sleeper the baseline already sits one above their feet and an open sky fails the
+     * check exactly as it does for someone standing. The roof check is one heightmap lookup, so it
      * gates the much wider block scan behind it.
      */
     public static boolean isShelteredByFire(Player player) {

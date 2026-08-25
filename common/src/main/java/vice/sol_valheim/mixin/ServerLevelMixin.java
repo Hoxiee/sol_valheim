@@ -39,9 +39,10 @@ public class ServerLevelMixin
             return;
 
         for (var player : level.players()) {
-            // the whole point of a bed: skip the night, wake up Rested
+            // the whole point of a bed: skip the night, wake up Rested - but only from a bed that
+            // sits under a roof with a fire burning nearby, Valheim's rest conditions in full
             var asleep = player.isSleeping();
-            if (asleep)
+            if (asleep && !player.isCreative() && RestedManager.isShelteredByFire(player))
                 RestedManager.topUp(player);
 
             var accessor = (PlayerEntityMixinDataAccessor) player;
