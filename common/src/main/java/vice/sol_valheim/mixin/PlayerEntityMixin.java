@@ -3,8 +3,10 @@ package vice.sol_valheim.mixin;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.SynchedEntityData;
+import net.minecraft.util.Mth;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.ai.attributes.AttributeModifier;
@@ -21,14 +23,19 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
+import vice.sol_valheim.AdvancementHelper;
 import vice.sol_valheim.ModConfig;
+import vice.sol_valheim.RestedManager;
 import vice.sol_valheim.SOLValheim;
+import vice.sol_valheim.SOLValheimClient;
 import vice.sol_valheim.ValheimFoodData;
 import vice.sol_valheim.accessors.FoodDataPlayerAccessor;
 import vice.sol_valheim.accessors.PlayerEntityMixinDataAccessor;
+import vice.sol_valheim.event.SOLValheimEvents;
 import vice.sol_valheim.extenders.SynchedEntityDataExtender;
 
 import java.util.ArrayList;
+import java.util.List;
 
 import static vice.sol_valheim.ValheimFoodData.RESETS_FOOD;
 
@@ -59,6 +66,15 @@ public abstract class PlayerEntityMixin extends LivingEntity implements PlayerEn
     @Unique
     private Item sol_valheim$lastConsumed;
 
+    /**
+     * The food properties instance of the last bite. 1.21 turned {@code FoodProperties} into a
+     * record and vanilla interns equal component maps, so sibling foods with identical numbers
+     * (raw beef and raw rabbit, say) hand over the very same instance from two different stacks -
+     * keying the collapse on it as well as the item keeps one bite from registering twice.
+     */
+    @Unique
+    private net.minecraft.world.food.FoodProperties sol_valheim$lastConsumedProperties;
+
     @Unique
     private int sol_valheim$lastConsumedTick = -1;
 
@@ -86,9 +102,23 @@ public abstract class PlayerEntityMixin extends LivingEntity implements PlayerEn
 
     @Override
     @Unique
-    public void sol_valheim$consume(ItemStack stack) {
-        if (stack == null || stack.isEmpty())
+    public void sol_valheim$setFoodData(ValheimFoodData data) {
+        if (data == null)
             return;
+
+        // the config, not whoever handed us the data, decides how many slots exist
+        data.MaxItemSlots = ValheimFoodData.configuredMaxSlots();
+        data.trimToSlots();
+
+        sol_valheim$food_data = data;
+        sol_valheim$sync();
+    }
+
+    @Override
+    @Unique
+    public boolean sol_valheim$consume(ItemStack stack) {
+        if (stack == null || stack.isEmpty())
+            return false;
 
         #if PRE_CURRENT_MC_1_19_2
         var level = this.level;
@@ -97,12 +127,23 @@ public abstract class PlayerEntityMixin extends LivingEntity implements PlayerEn
         #endif
 
         if (level.isClientSide)
-            return;
+            return false;
 
         // Player.eat, FoodData.eat and completeUsingItem can all fire for a single bite
         var item = stack.getItem();
+
+        #if MC_1_21_1
+        var properties = stack.get(net.minecraft.core.component.DataComponents.FOOD);
+        if (sol_valheim$lastConsumedTick == this.tickCount
+                && (sol_valheim$lastConsumed == item
+                || (properties != null && properties == sol_valheim$lastConsumedProperties)))
+            return false;
+
+        sol_valheim$lastConsumedProperties = properties;
+        #else
         if (sol_valheim$lastConsumed == item && sol_valheim$lastConsumedTick == this.tickCount)
-            return;
+            return false;
+        #endif
 
         sol_valheim$lastConsumed = item;
         sol_valheim$lastConsumedTick = this.tickCount;
@@ -111,15 +152,29 @@ public abstract class PlayerEntityMixin extends LivingEntity implements PlayerEn
             if (!sol_valheim$food_data.isEmpty()) {
                 sol_valheim$food_data.clear();
                 sol_valheim$sync();
+                return true;
             }
-            return;
+            return false;
         }
 
+        var config = ModConfig.getFoodConfig(item);
         if (!sol_valheim$food_data.eatItem(item))
-            return;
+            return false;
 
         sol_valheim$applyExtraEffects(item);
         sol_valheim$sync();
+
+        var self = (Player) (LivingEntity) this;
+        AdvancementHelper.award(self, "root");
+        AdvancementHelper.award(self, "first_meal");
+        if (ValheimFoodData.isDrinkable(item))
+            AdvancementHelper.award(self, "refreshed");
+        if (sol_valheim$food_data.ItemEntries.size() >= sol_valheim$food_data.getMaxItemSlots())
+            AdvancementHelper.award(self, "full_table");
+
+        SOLValheimEvents.FOOD_EATEN.invoker().onFoodEaten(self, item, config);
+
+        return true;
     }
 
     /**
@@ -143,7 +198,7 @@ public abstract class PlayerEntityMixin extends LivingEntity implements PlayerEn
             // "Effect Level 1" in the config means level I, which vanilla calls amplifier 0
             var amplifier = Math.max(0, entry.amplifier - 1);
 
-            this.addEffect(new MobEffectInstance(effect, duration, amplifier, false, true, true));
+            this.addEffect(new MobEffectInstance(vice.sol_valheim.utils.RegistryHelper.effectHolder(effect), duration, amplifier, false, true, true));
         }
     }
 
@@ -158,10 +213,18 @@ public abstract class PlayerEntityMixin extends LivingEntity implements PlayerEn
         ((FoodDataPlayerAccessor) foodData).sol_valheim$setPlayer((Player) (LivingEntity) this);
     }
 
+    // the 1.21 line hands the item's food properties into eat as a third argument
+    #if PRE_CURRENT_MC_1_20_1
     @Inject(at = {@At("HEAD")}, method = {"eat(Lnet/minecraft/world/level/Level;Lnet/minecraft/world/item/ItemStack;)Lnet/minecraft/world/item/ItemStack;"})
     private void onEatFood(Level world, ItemStack stack, CallbackInfoReturnable<ItemStack> info) {
         sol_valheim$consume(stack);
     }
+    #elif MC_1_21_1
+    @Inject(at = {@At("HEAD")}, method = {"eat(Lnet/minecraft/world/level/Level;Lnet/minecraft/world/item/ItemStack;Lnet/minecraft/world/food/FoodProperties;)Lnet/minecraft/world/item/ItemStack;"})
+    private void onEatFood(Level world, ItemStack stack, net.minecraft.world.food.FoodProperties properties, CallbackInfoReturnable<ItemStack> info) {
+        sol_valheim$consume(stack);
+    }
+    #endif
 
     @Inject(at = {@At("HEAD")}, method = {"tick"})
     private void onTick(CallbackInfo info) {
@@ -179,8 +242,21 @@ public abstract class PlayerEntityMixin extends LivingEntity implements PlayerEn
         if (level.isClientSide) {
             // the server no longer resends every tick, so run the countdown locally for a smooth hud
             var displayed = this.entityData.get(sol_valheim$DATA_ACCESSOR);
-            if (displayed != null && !displayed.isEmpty())
-                displayed.tick();
+            if (displayed != null && !displayed.isEmpty()) {
+                var expired = displayed.tick();
+                // every player in render distance ticks through here; only your own meals may cue
+                if ((Object) this == net.minecraft.client.Minecraft.getInstance().player) {
+                    if (!expired.isEmpty()) {
+                        var anyDrink = false;
+                        for (var item : expired)
+                            anyDrink |= ValheimFoodData.isDrinkable(item);
+
+                        SOLValheimClient.onFoodsExpired(anyDrink);
+                    }
+
+                    SOLValheimClient.tickDecayCues(displayed);
+                }
+            }
             return;
         }
 
@@ -190,13 +266,9 @@ public abstract class PlayerEntityMixin extends LivingEntity implements PlayerEn
         var config = SOLValheim.Config.common;
         Player player = (Player) (LivingEntity) this;
 
-        if (isDeadOrDying()) {
-            if (!sol_valheim$food_data.isEmpty()) {
-                sol_valheim$food_data.clear();
-                sol_valheim$sync();
-            }
+        // dishes survive death scaled down by keepFoodPercentageOnDeath; see onDie
+        if (isDeadOrDying())
             return;
-        }
 
         var changed = false;
 
@@ -205,11 +277,12 @@ public abstract class PlayerEntityMixin extends LivingEntity implements PlayerEn
         if (sol_valheim$food_data.MaxItemSlots != slots) {
             sol_valheim$food_data.MaxItemSlots = slots;
             changed |= sol_valheim$food_data.trimToSlots();
-            changed = true;
         }
 
-        if (!sol_valheim$food_data.isEmpty())
-            changed |= sol_valheim$food_data.tick();
+        var expired = sol_valheim$food_data.tick();
+        changed |= !expired.isEmpty();
+        for (var food : expired)
+            SOLValheimEvents.FOOD_EXPIRED.invoker().onFoodExpired(player, food);
 
         if (changed || --sol_valheim$syncTimer <= 0)
             sol_valheim$sync();
@@ -219,15 +292,34 @@ public abstract class PlayerEntityMixin extends LivingEntity implements PlayerEn
         var foodHealth = Math.min(config.maxFoodHealth * 2, (config.startingHealth * 2) + sol_valheim$food_data.getTotalFoodNutrition());
         sol_valheim$updateMaxHealth(player, foodHealth);
 
+        sol_valheim$tickWeakened(player, config);
+
         if (config.speedBoost > 0.01f)
             sol_valheim$updateSpeedBoost(player, config, foodHealth);
+
+        sol_valheim$enforceSprint(player, config);
+        sol_valheim$applyEmptyStomachDebuffs(player, config);
+
+        if (config.foodEffectMode != ModConfig.Common.FoodEffectMode.ONCE)
+            sol_valheim$tickFoodEffects(player, config);
 
         var timeSinceHurt = level.getGameTime() - ((LivingEntityDamageAccessor) this).getLastDamageStamp();
         var period = Math.max(1, config.regenSpeedModifier);
         if (timeSinceHurt > config.regenDelay && player.tickCount % period == 0 && player.getHealth() < player.getMaxHealth())
         {
-            player.heal(sol_valheim$food_data.getRegenSpeed() / 20f);
+            var regenSpeed = sol_valheim$food_data.getRegenSpeed();
+            if (config.restedEnabled && player.hasEffect(vice.sol_valheim.utils.RegistryHelper.effectHolder(SOLValheim.RESTED.get())))
+                regenSpeed *= config.restedRegenMultiplier;
+
+            player.heal(regenSpeed / 20f);
         }
+
+        // a roof does not move, so the shelter scan runs on a throttle, not every tick
+        if (config.restedEnabled
+                && !player.isCreative()
+                && player.tickCount % RestedManager.SCAN_INTERVAL == 0
+                && RestedManager.isShelteredByFire(player))
+            RestedManager.topUp(player);
     }
 
     /**
@@ -241,20 +333,120 @@ public abstract class PlayerEntityMixin extends LivingEntity implements PlayerEn
         if (attribute == null)
             return;
 
-        double amount = foodHealth - Attributes.MAX_HEALTH.getDefaultValue();
+        double amount = foodHealth - getDefaultMaxHealth();
         var existing = attribute.getModifier(SOLValheim.FOOD_HEALTH_ID);
 
-        if (existing == null || existing.getAmount() != amount) {
+        if (existing == null || modifierAmount(existing) != amount) {
             if (existing != null)
                 attribute.removeModifier(SOLValheim.FOOD_HEALTH_ID);
 
+            // 1.21 drops the human readable name and keys modifiers by ResourceLocation
+            #if PRE_CURRENT_MC_1_20_1
             attribute.addTransientModifier(new AttributeModifier(SOLValheim.FOOD_HEALTH_ID,
-                    "sol_valheim_food_health", amount, AttributeModifier.Operation.ADDITION));
+                    "sol_valheim_food_health", amount, opAddition()));
+            #else
+            attribute.addTransientModifier(new AttributeModifier(SOLValheim.FOOD_HEALTH_ID, amount,
+                    opAddition()));
+            #endif
         }
 
         var max = player.getMaxHealth();
         if (player.getHealth() > max)
             player.setHealth(max);
+    }
+
+    /** The 20 health the attribute starts with - the holder API from 1.21 reads it through {@code value()}. */
+    @Unique
+    private static double getDefaultMaxHealth() {
+        #if PRE_CURRENT_MC_1_20_1
+        return Attributes.MAX_HEALTH.getDefaultValue();
+        #else
+        return Attributes.MAX_HEALTH.value().getDefaultValue();
+        #endif
+    }
+
+    /** 1.20.5 turned AttributeModifier into a record - the accessor differs by target. */
+    @Unique
+    private static double modifierAmount(AttributeModifier modifier) {
+        #if PRE_CURRENT_MC_1_20_1
+        return modifier.getAmount();
+        #else
+        return modifier.amount();
+        #endif
+    }
+
+    /** 1.20.5 renamed the additive operation alongside the multiply ones. */
+    @Unique
+    private static AttributeModifier.Operation opAddition() {
+        #if PRE_CURRENT_MC_1_20_1
+        return AttributeModifier.Operation.ADDITION;
+        #else
+        return AttributeModifier.Operation.ADD_VALUE;
+        #endif
+    }
+
+    @Unique
+    private static AttributeModifier.Operation opMultipliedBase() {
+        #if PRE_CURRENT_MC_1_20_1
+        return AttributeModifier.Operation.MULTIPLY_BASE;
+        #else
+        return AttributeModifier.Operation.ADD_MULTIPLIED_BASE;
+        #endif
+    }
+
+    @Unique
+    private static AttributeModifier.Operation opMultipliedTotal() {
+        #if PRE_CURRENT_MC_1_20_1
+        return AttributeModifier.Operation.MULTIPLY_TOTAL;
+        #else
+        return AttributeModifier.Operation.ADD_MULTIPLIED_TOTAL;
+        #endif
+    }
+
+    /**
+     * Drives the death-granted Weakened effect. The counter lives on the food data (which survives
+     * the respawn instance swap); this keeps a MULTIPLY_TOTAL modifier on max health and re-draws
+     * the vanilla effect icon while it runs. Stateless against config changes: turning the feature
+     * off, or the timer running out, simply removes the modifier again.
+     */
+    @Unique
+    private void sol_valheim$tickWeakened(Player player, ModConfig.Common config) {
+        var attribute = player.getAttribute(Attributes.MAX_HEALTH);
+        if (attribute == null)
+            return;
+
+        if (!config.weakenedOnDeath || sol_valheim$food_data.weakenedTicks <= 0) {
+            sol_valheim$food_data.weakenedTicks = 0;
+            if (attribute.getModifier(SOLValheim.WEAKENED_ID) != null)
+                attribute.removeModifier(SOLValheim.WEAKENED_ID);
+            return;
+        }
+
+        sol_valheim$food_data.weakenedTicks--;
+
+        var penalty = -Mth.clamp(config.weakenedHealthPenalty, 0f, 0.95f);
+        var existing = attribute.getModifier(SOLValheim.WEAKENED_ID);
+        if (existing == null || modifierAmount(existing) != penalty) {
+            if (existing != null)
+                attribute.removeModifier(SOLValheim.WEAKENED_ID);
+
+            var op = opMultipliedTotal();
+
+            #if PRE_CURRENT_MC_1_20_1
+            attribute.addTransientModifier(new AttributeModifier(SOLValheim.WEAKENED_ID,
+                    "sol_valheim_weakened", penalty, op));
+            #else
+            attribute.addTransientModifier(new AttributeModifier(SOLValheim.WEAKENED_ID, penalty, op));
+            #endif
+        }
+
+        // the effect itself is cosmetic - the icon and its countdown; vanilla wipes it on death,
+        // so it is quietly redrawn here from the surviving counter
+        var weakened = vice.sol_valheim.utils.RegistryHelper.effectHolder(SOLValheim.WEAKENED.get());
+        var marker = player.getEffect(weakened);
+        if (marker == null || Math.abs(marker.getDuration() - sol_valheim$food_data.weakenedTicks) > 20)
+            player.addEffect(new MobEffectInstance(weakened,
+                    Math.max(1, sol_valheim$food_data.weakenedTicks), 0, false, false, true));
     }
 
     @Unique
@@ -273,13 +465,152 @@ public abstract class PlayerEntityMixin extends LivingEntity implements PlayerEn
         }
 
         // re-apply when the configured amount changed, otherwise an edit would never take effect
-        if (existing != null && existing.getAmount() == config.speedBoost)
+        if (existing != null && modifierAmount(existing) == config.speedBoost)
             return;
 
         if (existing != null)
             attribute.removeModifier(SOLValheim.SPEED_BUFF_ID);
 
         attribute.addTransientModifier(SOLValheim.createSpeedBuffModifier());
+    }
+
+    /**
+     * The client decides when it starts sprinting, but the server owns whether that sticks. Without
+     * this a hacked or desynced client sprints forever on an empty stomach while LocalPlayerMixin
+     * only ever stopped honest ones. Mirrors that gate's exceptions exactly.
+     */
+    @Unique
+    private void sol_valheim$enforceSprint(Player player, ModConfig.Common config) {
+        if (!config.sprintRequiresFood || !player.isSprinting())
+            return;
+
+        // flight ignores the rule and a fresh spawn gets a moment to run for cover
+        if (player.getAbilities().mayfly || player.tickCount < config.respawnGracePeriod * 20)
+            return;
+
+        if (sol_valheim$food_data.ItemEntries.isEmpty())
+            player.setSprinting(false);
+    }
+
+    /**
+     * Weakness, slowness and mining fatigue while every food slot is empty, levels from the config
+     * (0 disables each). Reapplied statelessly like REAPPLY effects: a short instance topped up
+     * every tick, so it lapses on its own about a second after the first bite. The sprint gate's
+     * exceptions apply here too - flight ignores it and the respawn grace protects a fresh spawn.
+     */
+    @Unique
+    private void sol_valheim$applyEmptyStomachDebuffs(Player player, ModConfig.Common config) {
+        var weakness = config.emptyStomachWeakness;
+        var slowness = config.emptyStomachSlowness;
+        var fatigue = config.emptyStomachMiningFatigue;
+        if (weakness <= 0 && slowness <= 0 && fatigue <= 0)
+            return;
+
+        if (player.getAbilities().mayfly || player.isCreative()
+                || player.tickCount < config.respawnGracePeriod * 20
+                || !sol_valheim$food_data.ItemEntries.isEmpty())
+            return;
+
+        // a short instance re-applied each tick, so it lapses soon after the first bite lands
+        var duration = 25;
+        if (weakness > 0)
+            player.addEffect(new MobEffectInstance(MobEffects.WEAKNESS, duration, weakness - 1, false, false, true));
+        if (slowness > 0)
+            player.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SLOWDOWN, duration, slowness - 1, false, false, true));
+        if (fatigue > 0)
+            player.addEffect(new MobEffectInstance(MobEffects.DIG_SLOWDOWN, duration, fatigue - 1, false, false, true));
+    }
+
+    /**
+     * Keeps a dish's extra effects topped up for as long as the dish lasts. Stateless by design -
+     * "the player is missing the effect" is the entire state machine, so nothing new has to persist.
+     * Milk clearing effects gets them back next tick; that reads as intended behaviour.
+     */
+    /**
+     * Dispatches the configured {@link ModConfig.Common.FoodEffectMode} for every active dish and
+     * the drink. ONCE never reaches here - nothing to maintain after the initial application.
+     */
+    @Unique
+    private void sol_valheim$tickFoodEffects(Player player, ModConfig.Common config) {
+        if (config.foodEffectMode == ModConfig.Common.FoodEffectMode.REAPPLY) {
+            sol_valheim$reapplyFoodEffects(player);
+            return;
+        }
+
+        for (var entry : sol_valheim$food_data.ItemEntries)
+            sol_valheim$fadeFor(player, entry);
+
+        if (sol_valheim$food_data.DrinkSlot != null)
+            sol_valheim$fadeFor(player, sol_valheim$food_data.DrinkSlot);
+    }
+
+    /**
+     * FADE mode: the effect lasts the whole dish and its level steps down as the food depletes -
+     * Strength 3 becomes 2, then 1, then vanishes with the last bite. The wanted level is simply
+     * {@code ceil(remaining * level)}, so a level 3 dish sits at III above two thirds remaining, II
+     * above one third, I after that. Stateless: the player's current instance is the only memory.
+     */
+    @Unique
+    private void sol_valheim$fadeFor(Player player, ValheimFoodData.EatenFoodItem entry) {
+        var config = ModConfig.getFoodConfig(entry.item);
+        if (config == null || config.extraEffects.isEmpty() || entry.ticksLeft <= 0)
+            return;
+
+        int totalTime = config.getTime();
+        float remaining = (float) entry.ticksLeft / totalTime;
+
+        for (var effectConfig : config.extraEffects) {
+            var effect = effectConfig.getEffect();
+            // instant effects cannot be stretched over the remaining time, so they stay one-shot
+            if (effect == null || effect.isInstantenous())
+                continue;
+
+            int levels = effectConfig.amplifier;
+            int wantedAmp = Math.max(1, Math.min(levels, (int) Math.ceil(remaining * levels))) - 1;
+
+            var current = player.getEffect(vice.sol_valheim.utils.RegistryHelper.effectHolder(effect));
+            // a stronger outside effect (beacon, potion) outranks the dish; wait for it to lapse
+            if (current != null && current.getAmplifier() >= wantedAmp)
+                continue;
+
+            // hold this step until the next one would begin; the last step runs to the dish's end
+            int boundary = (int) Math.ceil((wantedAmp) / (double) levels * totalTime);
+            int duration = Math.max(1, Math.min(entry.ticksLeft, entry.ticksLeft - boundary));
+
+            // silent re-application: no particle burst on every step, but the hud icon stays
+            player.addEffect(new MobEffectInstance(vice.sol_valheim.utils.RegistryHelper.effectHolder(effect), duration, wantedAmp, false, false, true));
+        }
+    }
+
+    @Unique
+    private void sol_valheim$reapplyFoodEffects(Player player) {
+        for (var entry : sol_valheim$food_data.ItemEntries)
+            sol_valheim$reapplyFor(player, entry);
+
+        if (sol_valheim$food_data.DrinkSlot != null)
+            sol_valheim$reapplyFor(player, sol_valheim$food_data.DrinkSlot);
+    }
+
+    @Unique
+    private void sol_valheim$reapplyFor(Player player, ValheimFoodData.EatenFoodItem entry) {
+        var config = ModConfig.getFoodConfig(entry.item);
+        if (config == null || config.extraEffects.isEmpty() || entry.ticksLeft <= 0)
+            return;
+
+        for (var effectConfig : config.extraEffects) {
+            var effect = effectConfig.getEffect();
+            // instant effects cannot be stretched over the remaining time, so they stay one-shot
+            if (effect == null || effect.isInstantenous() || player.hasEffect(vice.sol_valheim.utils.RegistryHelper.effectHolder(effect)))
+                continue;
+
+            var fullDuration = Math.max(1, Math.round(config.getTime() * effectConfig.duration));
+            // an effect never outlives the dish that granted it
+            var duration = Math.max(1, Math.min(fullDuration, entry.ticksLeft));
+            var amplifier = Math.max(0, effectConfig.amplifier - 1);
+
+            // silent re-application: no particle burst on every refresh, but the hud icon stays
+            player.addEffect(new MobEffectInstance(vice.sol_valheim.utils.RegistryHelper.effectHolder(effect), duration, amplifier, false, false, true));
+        }
     }
 
     @Inject(at = {@At("HEAD")}, method = {"canEat(Z)Z"}, cancellable = true)
@@ -322,6 +653,8 @@ public abstract class PlayerEntityMixin extends LivingEntity implements PlayerEn
         sol_valheim$sync();
     }
 
+    // the 1.21 line routes tracked-data definition through a builder instead of the live SynchedEntityData
+    #if PRE_CURRENT_MC_1_20_1
     @Inject(at = {@At("TAIL")}, method = {"defineSynchedData"})
     private void onInitDataTracker(CallbackInfo info) {
         if (sol_valheim$food_data == null)
@@ -329,4 +662,13 @@ public abstract class PlayerEntityMixin extends LivingEntity implements PlayerEn
 
         this.entityData.define(sol_valheim$DATA_ACCESSOR, sol_valheim$food_data);
     }
+    #else
+    @Inject(at = {@At("TAIL")}, method = {"defineSynchedData(Lnet/minecraft/network/syncher/SynchedEntityData$Builder;)V"})
+    private void onInitDataTracker(net.minecraft.network.syncher.SynchedEntityData.Builder builder, CallbackInfo info) {
+        if (sol_valheim$food_data == null)
+            sol_valheim$food_data = new ValheimFoodData();
+
+        builder.define(sol_valheim$DATA_ACCESSOR, sol_valheim$food_data);
+    }
+    #endif
 }

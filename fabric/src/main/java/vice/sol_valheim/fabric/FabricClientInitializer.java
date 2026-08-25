@@ -14,6 +14,12 @@ public class FabricClientInitializer implements ClientModInitializer
     public void onInitializeClient()
     {
         SOLValheimClient.init();
+        // fabric api grew a tooltip context argument on the 1.21 line
+        #if PRE_CURRENT_MC_1_20_1
         ItemTooltipCallback.EVENT.register(SOLValheim::addTooltip);
+        #else
+        ItemTooltipCallback.EVENT.register((stack, tooltipContext, tooltipFlag, lines) ->
+                SOLValheim.addTooltip(stack, tooltipFlag, lines));
+        #endif
     }
 }

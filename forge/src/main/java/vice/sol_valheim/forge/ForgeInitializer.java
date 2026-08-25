@@ -11,6 +11,12 @@ public class ForgeInitializer
     public ForgeInitializer() {
 		// Submit our event bus to let architectury register our content on the right time
         EventBuses.registerModEventBus(SOLValheim.MOD_ID, FMLJavaModLoadingContext.get().getModEventBus());
+
+        // forge routes the tracked-data serializer through its registry instead of vanilla's
+        // static method, so it is wired up before common init would try the vanilla path
+        ForgeDataSerializers.register(FMLJavaModLoadingContext.get().getModEventBus());
+        SOLValheim.platformHandledDataSerializers = true;
+
         SOLValheim.init();
     }
 }

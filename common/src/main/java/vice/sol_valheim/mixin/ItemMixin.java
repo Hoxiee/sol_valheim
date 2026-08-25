@@ -31,10 +31,16 @@ public class ItemMixin
     private void onCanConsume(Level level, Player player, InteractionHand usedHand, CallbackInfoReturnable<InteractionResultHolder<ItemStack>> info)
     {
         var item = (Item) (Object) this;
+        var stack = player.getItemInHand(usedHand);
+
+        // 1.20.5 moved edibility onto data components
+        #if PRE_CURRENT_MC_1_20_1
         if (!item.isEdible())
             return;
-
-        var stack = player.getItemInHand(usedHand);
+        #elif MC_1_21_1
+        if (!stack.has(net.minecraft.core.component.DataComponents.FOOD))
+            return;
+        #endif
 
         // clearing your stomach is always allowed
         if (stack.is(RESETS_FOOD))
@@ -44,9 +50,14 @@ public class ItemMixin
         if (foodData == null)
             return;
 
+        #if PRE_CURRENT_MC_1_20_1
         var properties = item.getFoodProperties();
         if (foodData.canEat(item) || (properties != null && properties.canAlwaysEat()))
             return;
+        #elif MC_1_21_1
+        if (foodData.canEat(item) || vice.sol_valheim.SOLValheim.canAlwaysEat(stack))
+            return;
+        #endif
 
         info.setReturnValue(InteractionResultHolder.fail(stack));
     }
