@@ -32,17 +32,29 @@ public class ValheimFoodData
     private static final String NBT_COUNT = "count";
     private static final String NBT_DRINK = "drink";
     private static final String NBT_DRINK_TICKS = "drinkticks";
+    private static final String NBT_WEAKENED_TICKS = "weakenedticks";
 
     #if PRE_CURRENT_MC_1_19_2
     public static final TagKey<Item> RESETS_FOOD = TagKey.create(Registry.ITEM_REGISTRY, new ResourceLocation(SOLValheim.MOD_ID, "resets_food"));
     public static final TagKey<Item> CAN_EAT_EARLY = TagKey.create(Registry.ITEM_REGISTRY, new ResourceLocation(SOLValheim.MOD_ID, "can_eat_early"));
     public static final TagKey<Item> NOT_CONSUMABLE = TagKey.create(Registry.ITEM_REGISTRY, new ResourceLocation(SOLValheim.MOD_ID, "not_consumable"));
+    public static final TagKey<Item> NO_DECAY = TagKey.create(Registry.ITEM_REGISTRY, new ResourceLocation(SOLValheim.MOD_ID, "no_decay"));
     #elif POST_CURRENT_MC_1_20_1
-    public static final TagKey<Item> RESETS_FOOD = TagKey.create(Registries.ITEM, new ResourceLocation(SOLValheim.MOD_ID, "resets_food"));
-    public static final TagKey<Item> CAN_EAT_EARLY = TagKey.create(Registries.ITEM, new ResourceLocation(SOLValheim.MOD_ID, "can_eat_early"));
-    public static final TagKey<Item> NOT_CONSUMABLE = TagKey.create(Registries.ITEM, new ResourceLocation(SOLValheim.MOD_ID, "not_consumable"));
+    public static final TagKey<Item> RESETS_FOOD = TagKey.create(Registries.ITEM, vice.sol_valheim.utils.RegistryHelper.of(SOLValheim.MOD_ID, "resets_food"));
+    public static final TagKey<Item> CAN_EAT_EARLY = TagKey.create(Registries.ITEM, vice.sol_valheim.utils.RegistryHelper.of(SOLValheim.MOD_ID, "can_eat_early"));
+    public static final TagKey<Item> NOT_CONSUMABLE = TagKey.create(Registries.ITEM, vice.sol_valheim.utils.RegistryHelper.of(SOLValheim.MOD_ID, "not_consumable"));
+    public static final TagKey<Item> NO_DECAY = TagKey.create(Registries.ITEM, vice.sol_valheim.utils.RegistryHelper.of(SOLValheim.MOD_ID, "no_decay"));
     #endif
 
+    /*
+     * The tracked-data serializer. 1.20.5 turned EntityDataSerializer into a codec-backed interface,
+     * so the newer target hands over a StreamCodec instead of overriding write/read.
+     * <p>
+     * Deliberately keeps the default (identity) copy on the codec path: the whole design aliases one
+     * mutable instance between the field, the tracked data and the hud, with explicit forced dirty
+     * flags on every mutation - a deep copy would just hide the countdown from whoever reads it.
+     */
+    #if PRE_CURRENT_MC_1_20_1
     public static final EntityDataSerializer<ValheimFoodData> FOOD_DATA_SERIALIZER = new EntityDataSerializer<>(){
         @Override
         public void write(FriendlyByteBuf buffer, ValheimFoodData value)
@@ -63,13 +75,28 @@ public class ValheimFoodData
             ret.ItemEntries = value.ItemEntries.stream().map(EatenFoodItem::new).collect(Collectors.toCollection(ArrayList::new));
             if (value.DrinkSlot != null)
                 ret.DrinkSlot = new EatenFoodItem(value.DrinkSlot);
+            ret.weakenedTicks = value.weakenedTicks;
             return ret;
         }
 
     };
+    #elif POST_CURRENT_MC_1_20_1
+    public static final EntityDataSerializer<ValheimFoodData> FOOD_DATA_SERIALIZER =
+            EntityDataSerializer.forValueType(net.minecraft.network.codec.StreamCodec.of(
+                    (FriendlyByteBuf buffer, ValheimFoodData value) -> buffer.writeNbt(value.save(new CompoundTag())),
+                    (FriendlyByteBuf buffer) -> ValheimFoodData.read(buffer.readNbt())
+            ));
+    #endif
 
     public List<EatenFoodItem> ItemEntries = new ArrayList<>();
     public EatenFoodItem DrinkSlot;
+
+    /**
+     * Ticks left on the death-granted Weakened effect. Lives here because this object is what the
+     * respawn hook hands across the player instance swap - a plain MobEffectInstance would be wiped
+     * by vanilla's effect clearing on death before it could ever be seen.
+     */
+    public int weakenedTicks;
 
     /**
      * Authoritative on the server, informational on the client. Zero means "not known yet", which is
@@ -107,6 +134,11 @@ public class ValheimFoodData
 
     public static boolean isDrinkable(Item item) {
         return item != null && isDrinkable(item.getDefaultInstance());
+    }
+
+    /** True for dishes a pack exempts from heart decay - see {@code #sol_valheim:no_decay}. */
+    public static boolean isDecayExempt(Item item) {
+        return item != null && item.getDefaultInstance().is(NO_DECAY);
     }
 
     public int getMaxItemSlots() {
@@ -213,8 +245,10 @@ public class ValheimFoodData
         DrinkSlot = null;
     }
 
-    /** @return true when a slot expired, i.e. when the change is worth a sync packet. */
-    public boolean tick()
+    private static final List<Item> NO_EXPIRIES = List.of();
+
+    /** @return what ran out this tick - the client uses it for the quiet expiry cue. */
+    public List<Item> tick()
     {
         return advance(1);
     }
@@ -223,28 +257,47 @@ public class ValheimFoodData
      * Runs {@code ticks} worth of time off every slot at once. Used by the regular tick and by the
      * sleep handler, which skips the whole night in one go.
      *
-     * @return true when at least one slot ran out
+     * @return every item whose slot ran out, deduplicated; empty (and allocation free) when none did
      */
-    public boolean advance(int ticks)
+    public List<Item> advance(int ticks)
     {
         if (ticks <= 0)
-            return false;
+            return NO_EXPIRIES;
 
-        boolean expired = false;
+        List<Item> expired = null;
         for (var item : ItemEntries)
             item.ticksLeft -= ticks;
 
         if (DrinkSlot != null) {
             DrinkSlot.ticksLeft -= ticks;
             if (DrinkSlot.ticksLeft <= 0) {
+                expired = addExpired(expired, DrinkSlot.item);
                 DrinkSlot = null;
-                expired = true;
             }
         }
 
-        if (ItemEntries.removeIf(item -> item.ticksLeft <= 0))
-            expired = true;
+        var iterator = ItemEntries.iterator();
+        while (iterator.hasNext())
+        {
+            var entry = iterator.next();
+            if (entry.ticksLeft <= 0) {
+                expired = addExpired(expired, entry.item);
+                iterator.remove();
+            }
+        }
 
+        return expired == null ? NO_EXPIRIES : expired;
+    }
+
+    private static List<Item> addExpired(List<Item> expired, Item item)
+    {
+        if (item == null || expired != null && expired.contains(item))
+            return expired;
+
+        if (expired == null)
+            expired = new ArrayList<>(2);
+
+        expired.add(item);
         return expired;
     }
 
@@ -277,7 +330,8 @@ public class ValheimFoodData
             if (food == null)
                 continue;
 
-            nutrition += food.getHearts();
+            // only dishes fade; the drink slot keeps its full value until it expires outright
+            nutrition += food.getHearts() * item.heartsDecayFactor();
         }
 
         if (DrinkSlot != null)
@@ -348,6 +402,8 @@ public class ValheimFoodData
             }
         }
 
+        tag.putInt(NBT_WEAKENED_TICKS, Math.max(0, weakenedTicks));
+
         return tag;
     }
 
@@ -381,12 +437,40 @@ public class ValheimFoodData
         if (drink != null && drinkTicks > 0)
             instance.DrinkSlot = new EatenFoodItem(drink, drinkTicks);
 
+        instance.weakenedTicks = Math.max(0, tag.getInt(NBT_WEAKENED_TICKS));
+
         return instance;
     }
 
     public static class EatenFoodItem {
         public Item item;
         public int ticksLeft;
+
+        /** Fraction of the dish's lifetime left, clamped to 0..1 - a config reload can shrink the total. */
+        public float remainingFraction() {
+            var config = ModConfig.getFoodConfig(item);
+            if (config == null)
+                return 1f;
+
+            return Mth.clamp((float) this.ticksLeft / config.getTime(), 0f, 1f);
+        }
+
+        /**
+         * Multiplier on the dish's hearts from the configured decay mode - see
+         * {@link ModConfig.Common.FoodDecayMode}. Always 1 when the mode is OFF or no config is
+         * loaded yet, so callers never have to special-case it.
+         */
+        public float heartsDecayFactor() {
+            if (isDecayExempt(item))
+                return 1f;
+
+            var config = SOLValheim.Config;
+            if (config == null || config.common == null || config.common.foodDecayMode == null)
+                return 1f;
+
+            return config.common.foodDecayMode.heartsFactor(remainingFraction(),
+                    config.common.foodDecayStartFraction, config.common.foodDecayMinFraction);
+        }
 
         public boolean canEatEarly() {
             if (item == null)
@@ -399,7 +483,7 @@ public class ValheimFoodData
             if (ticksLeft < minTicks)
                 return true;
 
-            if (item.isEdible() && item.getFoodProperties() != null && item.getFoodProperties().canAlwaysEat())
+            if (SOLValheim.canAlwaysEat(stack))
                 return true;
 
             if (stack.is(CAN_EAT_EARLY) || isDrinkable(stack))

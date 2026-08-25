@@ -29,6 +29,7 @@ import org.joml.Vector3f;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.util.FastColor;
 import net.minecraft.util.Mth;
+import net.minecraft.Util;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
@@ -36,8 +37,10 @@ import vice.sol_valheim.accessors.PlayerEntityMixinDataAccessor;
 import vice.sol_valheim.mixin.LivingEntityDamageAccessor;
 import vice.sol_valheim.utils.RegistryHelper;
 
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 public class FoodHUD implements ClientGuiEvent.RenderHud
 {
@@ -57,6 +60,8 @@ public class FoodHUD implements ClientGuiEvent.RenderHud
     private static final String OUTLINE_LARGE_SPRITE = "textures/gui/sprites/meter_outline/default_large.png";
     private static final String REGEN_OUTLINE_SPRITE = "textures/gui/sprites/meter_outline/regen.png";
     private static final String REGEN_SPRITE = "textures/gui/sprites/meter_background/regen.png";
+    private static final String SPRINT_SPRITE = "textures/gui/sprites/hint/sprint.png";
+    private static final String SPRINT_SPRITE_LARGE = "textures/gui/sprites/hint/sprint_large.png";
 
     private static final int WHITE = FastColor.ARGB32.color(255, 255, 255, 255);
     private static final int WHITE_BG = FastColor.ARGB32.color(128, 255, 255, 255);
@@ -71,9 +76,91 @@ public class FoodHUD implements ClientGuiEvent.RenderHud
     private static Item cakeSliceItem;
     private static boolean cakeSliceResolved;
 
+    /** Items are registry singletons and these stacks are never mutated, so one per item forever. */
+    private static final Map<Item, ItemStack> DISPLAY_STACKS = new IdentityHashMap<>();
+
+    /** How long the "your dish just ran out" highlight stays up, in milliseconds. */
+    private static final int EXPIRY_FLASH_MS = 900;
+    private static long expiryFlashUntil;
+    /** Which cell the current flash points at - a drink frees the last slot, not the first. */
+    private static boolean expiryFlashIsDrink;
+
+    /** Sprint hint states; anything but ALLOWED draws, transitions fade in and out. */
+    private enum SprintState { ALLOWED, GRACE, LOCKED }
+
+    private static final int SPRINT_HINT_FADE_MS = 250;
+    private static SprintState sprintState = SprintState.ALLOWED;
+    private static long sprintStateChangedAt;
+
+    /**
+     * Small status light above the food row: a boot tinted red while the stomach is empty (slow
+     * pulse, it is a state not an alarm) or yellow with the seconds left while the respawn grace
+     * period is running down. Mirrors the exact gate LocalPlayerMixin and the server both use, so
+     * the icon never promises something the game would refuse.
+     */
+    private static void renderSprintHint(#if PRE_CURRENT_MC_1_19_2 PoseStack #elif POST_CURRENT_MC_1_20_1 GuiGraphics #endif graphics) {
+        var config = SOLValheim.Config;
+        if (!config.client.showSprintHint || !SOLValheimClient.sprintRequiresFood())
+            return;
+
+        var player = client.player;
+
+        SprintState now;
+        if (player.getAbilities().mayfly)
+            now = SprintState.ALLOWED;
+        else if (player.tickCount < SOLValheimClient.respawnGracePeriod() * 20)
+            now = SprintState.GRACE;
+        else {
+            var foodData = ((PlayerEntityMixinDataAccessor) player).sol_valheim$getFoodData();
+            now = foodData != null && !foodData.ItemEntries.isEmpty() ? SprintState.ALLOWED : SprintState.LOCKED;
+        }
+
+        long millis = Util.getMillis();
+        if (now != sprintState) {
+            sprintState = now;
+            sprintStateChangedAt = millis;
+        }
+
+        if (now == SprintState.ALLOWED)
+            return;
+
+        float appear = Math.min(1f, (millis - sprintStateChangedAt) / (float) SPRINT_HINT_FADE_MS);
+        var hudConfig = config.client.sprintHudConfig;
+        boolean large = config.client.useLargeIcons;
+        int size = large ? 14 : 9;
+        int x = (int) ((client.getWindow().getGuiScaledWidth() * hudConfig.xAnchor) + hudConfig.xOffset);
+        // the large sprite hangs 5px lower from the same top-left anchor; lift it back onto the row
+        int y = (int) ((client.getWindow().getGuiScaledHeight() * hudConfig.yAnchor) + hudConfig.yOffset) - (size - 9);
+
+        // the locked pulse breathes slowly; grace stays solid because it carries a countdown
+        float pulse = now == SprintState.LOCKED ? (float) (0.8d + 0.2d * Math.abs(Math.sin(millis / 400d))) : 1f;
+        int baseColor = now == SprintState.GRACE ? YELLOW : RED;
+        int alpha = (int) (255 * appear * pulse);
+        int color = FastColor.ARGB32.color(alpha,
+                FastColor.ARGB32.red(baseColor), FastColor.ARGB32.green(baseColor), FastColor.ARGB32.blue(baseColor));
+
+        blit(graphics, large ? SPRINT_SPRITE_LARGE : SPRINT_SPRITE, size, size, x, y, color);
+
+        if (now == SprintState.GRACE) {
+            var ticksLeft = SOLValheimClient.respawnGracePeriod() * 20 - player.tickCount;
+            var secondsLeft = Math.max(0, Mth.ceil(ticksLeft / 20f));
+            drawFont(graphics, secondsLeft + "s", x + size + 2, y + (size - 8) / 2 + 1, color);
+        }
+    }
+
     public FoodHUD() {
         ClientGuiEvent.RENDER_HUD.register(this);
         client = Minecraft.getInstance();
+    }
+
+    /** Arms the brief highlight shown where a dish has just run out. */
+    public static void pulseExpiry(boolean drinkExpired) {
+        expiryFlashUntil = Util.getMillis() + EXPIRY_FLASH_MS;
+        expiryFlashIsDrink = drinkExpired;
+    }
+
+    private static ItemStack displayStack(Item item) {
+        return DISPLAY_STACKS.computeIfAbsent(item, i -> new ItemStack(i, 1));
     }
 
     private static Item farmersDelightCakeSlice() {
@@ -87,14 +174,27 @@ public class FoodHUD implements ClientGuiEvent.RenderHud
     }
 
     @Override
-    public void renderHud(#if PRE_CURRENT_MC_1_19_2 PoseStack #elif POST_CURRENT_MC_1_20_1 GuiGraphics #endif graphics, float tickDelta) {
+    #if PRE_CURRENT_MC_1_19_2
+    public void renderHud(PoseStack graphics, float tickDelta) {
+    #elif MC_1_21_1
+    // architectury 13 passes the delta tracker instead of a raw float
+    public void renderHud(GuiGraphics graphics, net.minecraft.client.DeltaTracker ignoredTickDelta) {
+    #else
+    public void renderHud(GuiGraphics graphics, float tickDelta) {
+    #endif
         if (client.player == null)
             return;
 
         if (client.player.isCreative() || client.player.isSpectator())
             return;
 
-        if (SOLValheim.Config == null || !SOLValheim.Config.client.showFoodHud)
+        if (SOLValheim.Config == null)
+            return;
+
+        // the sprint hint has its own toggle and keeps working while the food hud is switched off
+        renderSprintHint(graphics);
+
+        if (!SOLValheim.Config.client.showFoodHud)
             return;
 
         var solPlayer = (PlayerEntityMixinDataAccessor) client.player;
@@ -110,12 +210,13 @@ public class FoodHUD implements ClientGuiEvent.RenderHud
         // Health regen timer
         var level = client.level;
         if (configData.showRegenMeter && level != null) {
+            var regenDelay = SOLValheimClient.regenDelay();
             var timeSinceHurt = level.getGameTime() - ((LivingEntityDamageAccessor) client.player).getLastDamageStamp();
-            if (timeSinceHurt < SOLValheim.Config.common.regenDelay) {
+            if (timeSinceHurt < regenDelay) {
                 int width = (int) ((client.getWindow().getGuiScaledWidth() * regenHudConfig.xAnchor) + regenHudConfig.xOffset);
                 int height = (int) ((client.getWindow().getGuiScaledHeight() * regenHudConfig.yAnchor) + regenHudConfig.yOffset);
 
-                float regenAlpha = 1 - ((float) timeSinceHurt / SOLValheim.Config.common.regenDelay);
+                float regenAlpha = 1 - ((float) timeSinceHurt / regenDelay);
                 blit(graphics, REGEN_OUTLINE_SPRITE, 9, 9, width, height, WHITE);
                 renderRadialBar(graphics, REGEN_SPRITE, 9, 9, width, height, WHITE, regenAlpha);
             }
@@ -143,6 +244,34 @@ public class FoodHUD implements ClientGuiEvent.RenderHud
             renderEmptyFoodSlot(graphics, offset, useLargeIcons, EMPTY_LARGE_SPRITE, EMPTY_SPRITE, DRINK_LARGE_SPRITE, DRINK_SPRITE, size, width, height, WHITE);
         }
 
+        renderExpiryFlash(graphics, foodData, foodHudConfig, useLargeIcons, size, width, height);
+    }
+
+    /**
+     * Brief fading highlight over the first empty slot - the place a dish has just vanished from.
+     * Runs on the millisecond clock so it survives pause menus; a second long, silent, no message.
+     */
+    private static void renderExpiryFlash(#if PRE_CURRENT_MC_1_19_2 PoseStack #elif POST_CURRENT_MC_1_20_1 GuiGraphics #endif graphics,
+                                          ValheimFoodData foodData, ModConfig.Client.FoodComponentConfig foodHudConfig,
+                                          boolean useLargeIcons, int size, int width, int height) {
+        long now = Util.getMillis();
+        if (now >= expiryFlashUntil)
+            return;
+
+        float progress = (expiryFlashUntil - now) / (float) EXPIRY_FLASH_MS;
+        int alpha = (int) (255 * progress * (0.6f + 0.4f * Math.abs(Math.sin(now / 90d))));
+        int color = FastColor.ARGB32.color(alpha, FastColor.ARGB32.red(YELLOW), FastColor.ARGB32.green(YELLOW), FastColor.ARGB32.blue(YELLOW));
+
+        // same geometry as renderEmptyFoodSlot; a drink frees the cell after the whole food row
+        int offset = expiryFlashIsDrink ? foodData.getMaxItemSlots() + 1 : foodData.ItemEntries.size() + 1;
+        var slotOffsets = foodHudConfig.slotOffsets;
+        var slotOffset = slotOffsets.size() >= offset ? slotOffsets.get(offset - 1) : null;
+
+        int startWidth = width + ((size + 1) * foodHudConfig.xGap * offset) + (slotOffset != null ? slotOffset.xOffset : 0);
+        int startHeight = height + ((size + 1) * foodHudConfig.yGap * offset) + (slotOffset != null ? slotOffset.yOffset : 0);
+
+        String outlineSprite = useLargeIcons ? OUTLINE_LARGE_SPRITE : OUTLINE_SPRITE;
+        blit(graphics, outlineSprite, size, size, startWidth, startHeight, color);
     }
 
     private static void renderEmptyFoodSlot(#if PRE_CURRENT_MC_1_19_2 PoseStack #elif POST_CURRENT_MC_1_20_1 GuiGraphics #endif graphics, int offset, boolean useLargeIcons, String bigPanelSprite, String panelSprite, String bigIconSprite, String iconSprite, int size, int width, int height, int color) {
@@ -181,6 +310,13 @@ public class FoodHUD implements ClientGuiEvent.RenderHud
         var isDrink = ValheimFoodData.isDrinkable(food.item);
         boolean canEat = food.canEatEarly();
         float ticksLeftPercent = Mth.clamp((float) food.ticksLeft / totalTime, 0.0F, 1.0F);
+
+        // dishes losing hearts to the decay curve darken with them; drinks and exempt items never do
+        var decayMode = SOLValheimClient.foodDecayMode();
+        float decayShade = 1f;
+        if (!isDrink && decayMode != ModConfig.Common.FoodDecayMode.OFF && !ValheimFoodData.isDecayExempt(food.item))
+            decayShade = 0.5f + 0.5f * decayMode.heartsFactor(ticksLeftPercent,
+                    SOLValheimClient.foodDecayStartFraction(), SOLValheimClient.foodDecayMinFraction());
 
         int xOffset = (slotHudConfig != null) ? slotHudConfig.xOffset : 0;
         int yOffset = (slotHudConfig != null) ? slotHudConfig.yOffset : 0;
@@ -231,7 +367,9 @@ public class FoodHUD implements ClientGuiEvent.RenderHud
         }
 
         // startHeight, not height: the cake branch used to ignore the row offset and drew off place
-        renderGUIItem(graphics, new ItemStack(displayItem, 1), startWidth + 1, startHeight + 1);
+        RenderSystem.setShaderColor(decayShade, decayShade, decayShade, 1f);
+        renderGUIItem(graphics, displayStack(displayItem), startWidth + 1, startHeight + 1);
+        RenderSystem.setShaderColor(1f, 1f, 1f, 1f);
 
         // Text
         if (useLargeIcons && (configData.showTimerText || effectCount > 0)) {
@@ -247,9 +385,17 @@ public class FoodHUD implements ClientGuiEvent.RenderHud
     }
 
     private static void blit(#if PRE_CURRENT_MC_1_19_2 PoseStack #elif POST_CURRENT_MC_1_20_1 GuiGraphics #endif graphics, String texture, int width, int height, int x, int y, int color) {
+        #if MC_1_21_1
+        // 1.21 retired the raw quad path - the gui graphics tint does the same job
+        var id = ResourceLocation.tryBuild("sol_valheim", texture);
+        graphics.setColor(FastColor.ARGB32.red(color) / 255f, FastColor.ARGB32.green(color) / 255f,
+                FastColor.ARGB32.blue(color) / 255f, FastColor.ARGB32.alpha(color) / 255f);
+        graphics.blit(id, x, y, 0, 0, 0, width, height, width, height);
+        graphics.setColor(1f, 1f, 1f, 1f);
+        #else
         #if PRE_CURRENT_MC_1_19_2
         Matrix4f matrix4f = graphics.last().pose();
-        #elif POST_CURRENT_MC_1_20_1
+        #else
         Matrix4f matrix4f = graphics.pose().last().pose();
         #endif
         Tesselator tesselator = Tesselator.getInstance();
@@ -267,6 +413,7 @@ public class FoodHUD implements ClientGuiEvent.RenderHud
 
         tesselator.end();
         RenderSystem.disableBlend();
+        #endif
     }
 
     private static Vector3f calcCircularCoords(float alpha) {
@@ -278,9 +425,47 @@ public class FoodHUD implements ClientGuiEvent.RenderHud
     }
 
     private static void renderRadialBar(#if PRE_CURRENT_MC_1_19_2 PoseStack #elif POST_CURRENT_MC_1_20_1 GuiGraphics #endif graphics, String texture, int width, int height, int x, int y, int color, float alpha) {
+        #if MC_1_21_1
+        Matrix4f matrix4f = graphics.pose().last().pose();
+        RenderSystem.setShader(GameRenderer::getPositionTexColorShader);
+        Tesselator tesselator = Tesselator.getInstance();
+        // 1.21 moved the buffer lifecycle into begin/build/draw
+        BufferBuilder buffer = tesselator.begin(VertexFormat.Mode.TRIANGLE_FAN, DefaultVertexFormat.POSITION_TEX_COLOR);
+
+        float middleX = x + ((float) width / 2);
+        float middleY = y + ((float) height / 2);
+
+        if (alpha < 1.00) {
+            buffer.addVertex(matrix4f, middleX, middleY, 0).setUv(0.5F, 0.5F).setColor(color);
+        }
+        buffer.addVertex(matrix4f, middleX, y, 0).setUv(0.5F, 0F).setColor(color);
+        if (alpha > 0.125) { // TOP LEFT
+            buffer.addVertex(matrix4f, x, y, 0).setUv(0F, 0F).setColor(color);
+        }
+        if (alpha > 0.375) { // BOTTOM LEFT
+            buffer.addVertex(matrix4f, x, y + height, 0).setUv(0F, 1F).setColor(color);
+        }
+        if (alpha > 0.625) { // BOTTOM RIGHT
+            buffer.addVertex(matrix4f, x + width, y + height, 0).setUv(1F, 1F).setColor(color);
+        }
+        if (alpha > 0.875) { // TOP RIGHT
+            buffer.addVertex(matrix4f, x + width, y, 0).setUv(1F, 0F).setColor(color);
+        }
+        if (alpha < 1.00) {
+            Vector3f ePos = calcCircularCoords(alpha);
+            buffer.addVertex(matrix4f, (middleX + (ePos.x() * ((float) width / 2))), (middleY + (ePos.y() * ((float) height / 2))), 0)
+                    .setUv((ePos.x() / 2) + 0.5F, (ePos.y() / 2) + 0.5F)
+                    .setColor(color);
+        }
+
+        RenderSystem.enableBlend();
+        RenderSystem.setShaderTexture(0, ResourceLocation.tryBuild("sol_valheim", texture));
+        com.mojang.blaze3d.vertex.BufferUploader.drawWithShader(buffer.build());
+        RenderSystem.disableBlend();
+        #else
         #if PRE_CURRENT_MC_1_19_2
         Matrix4f matrix4f = graphics.last().pose();
-        #elif POST_CURRENT_MC_1_20_1
+        #else
         Matrix4f matrix4f = graphics.pose().last().pose();
         #endif
         RenderSystem.setShader(GameRenderer::getPositionColorTexShader);
@@ -294,13 +479,10 @@ public class FoodHUD implements ClientGuiEvent.RenderHud
         float middleX = x + ((float) width / 2);
         float middleY = y + ((float) height / 2);
 
-        // Center Vertex
         if (alpha < 1.00) {
             buffer.vertex(matrix4f, middleX, middleY, 0).color(color).uv(0.5F,0.5F).endVertex();
         }
-        // Start Vertex - TOP CENTRE
         buffer.vertex(matrix4f, middleX, y, 0).color(color).uv(0.5F, 0F).endVertex();
-        // Intermediate Vertices
         if (alpha > 0.125) { // TOP LEFT
             buffer.vertex(matrix4f, x, y, 0).color(color).uv(0F, 0F).endVertex();
         }
@@ -313,16 +495,16 @@ public class FoodHUD implements ClientGuiEvent.RenderHud
         if (alpha > 0.875) { // TOP RIGHT
             buffer.vertex(matrix4f, x + width, y, 0).color(color).uv(1F, 0F).endVertex();
         }
-        // Endpoint Vertex
         if (alpha < 1.00) {
             Vector3f ePos = calcCircularCoords(alpha);
             buffer.vertex(matrix4f, (middleX + (ePos.x() * ((float) width / 2))), (middleY + (ePos.y() * ((float) height / 2))), 0)
                     .color(color)
-                    .uv( (ePos.x() / 2) + 0.5F, (ePos.y() / 2) + 0.5F)
+                    .uv((ePos.x() / 2) + 0.5F, (ePos.y() / 2) + 0.5F)
                     .endVertex();
         }
         tesselator.end();
         RenderSystem.disableBlend();
+        #endif
     }
 
     private static void renderGUIItem(#if PRE_CURRENT_MC_1_19_2 PoseStack #elif POST_CURRENT_MC_1_20_1 GuiGraphics #endif graphics, ItemStack stack, int x, int y)
@@ -344,9 +526,7 @@ public class FoodHUD implements ClientGuiEvent.RenderHud
         poseStack.scale(1.0F, -1.0F, 1.0F);
         poseStack.scale(16.0F, 16.0F, 16.0F);
 
-        var useLargeIcons = true;
-        var scale = useLargeIcons ? 0.75f : 0.5f;
-        poseStack.scale(scale, scale, scale);
+        poseStack.scale(0.75f, 0.75f, 0.75f);
         poseStack.translate(-0.15, 0.15, 0f);
 
         RenderSystem.applyModelViewMatrix();
