@@ -1,11 +1,11 @@
 package vice.sol_valheim;
 
 import net.minecraft.core.BlockPos;
-import net.minecraft.tags.BlockTags;
 import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.BaseFireBlock;
+import net.minecraft.world.level.block.CampfireBlock;
 import net.minecraft.world.level.levelgen.Heightmap;
 
 /**
@@ -18,8 +18,8 @@ import net.minecraft.world.level.levelgen.Heightmap;
  */
 public final class RestedManager
 {
-    /** Horizontal/vertical reach of the fire scan around the player's feet. */
-    private static final int FIRE_RADIUS = 4;
+    /** Horizontal reach of the fire scan around the bed - Chebyshev distance, so corners count too. */
+    private static final int FIRE_RADIUS = 6;
 
     private RestedManager() {}
 
@@ -45,11 +45,14 @@ public final class RestedManager
     }
 
     /**
-     * True when the player rests under something solid with open flame nearby - the sleep-time
+     * True when the player rests under something solid with a live flame nearby - the sleep-time
      * eligibility test for {@link RestedEffect}. A bed counts as motion blocking for the heightmap,
      * so for a sleeper the baseline already sits one above their feet and an open sky fails the
      * check exactly as it does for someone standing. The roof check is one heightmap lookup, so it
      * gates the much wider block scan behind it.
+     * <p>
+     * Bare flame burns by definition, but a campfire only counts when actually lit - an unlit one
+     * gives no warmth to rest by.
      */
     public static boolean isShelteredByFire(Player player) {
         #if PRE_CURRENT_MC_1_19_2
@@ -69,7 +72,7 @@ public final class RestedManager
                 feet.offset(FIRE_RADIUS, 2, FIRE_RADIUS))) {
 
             var state = level.getBlockState(pos);
-            if (state.getBlock() instanceof BaseFireBlock || state.is(BlockTags.CAMPFIRES))
+            if (state.getBlock() instanceof BaseFireBlock || CampfireBlock.isLitCampfire(state))
                 return true;
         }
 
