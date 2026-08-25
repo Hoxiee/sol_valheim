@@ -21,6 +21,7 @@ import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.ModifyVariable;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import vice.sol_valheim.AdvancementHelper;
@@ -204,6 +205,26 @@ public abstract class PlayerEntityMixin extends LivingEntity implements PlayerEn
     @Inject(at = {@At("HEAD")}, method = {"causeFoodExhaustion(F)V"}, cancellable = true)
     private void onAddExhaustion(float exhaustion, CallbackInfo info) {
         info.cancel();
+    }
+
+    /**
+     * Valheim's undocumented Rested bonus: experience points are worth more while Rested. Every
+     * source the game has - orbs from kills, mining, fishing, breeding and trading (furnaces and
+     * grindstones spawn orbs too), advancement rewards and /xp - funnels through this one method
+     * with the same signature in all supported versions, so one argument rewrite covers everything.
+     * Only positive amounts scale: level changes run through giveExperienceLevels and stay
+     * untouched. Server side only, like every vanilla caller.
+     */
+    @ModifyVariable(method = "giveExperiencePoints(I)V", at = @At("HEAD"), argsOnly = true)
+    private int sol_valheim$restedXpBoost(int amount) {
+        var config = SOLValheim.Config;
+        if (config == null || !config.common.restedEnabled || amount <= 0)
+            return amount;
+
+        if (!hasEffect(vice.sol_valheim.utils.RegistryHelper.effectHolder(SOLValheim.RESTED.get())))
+            return amount;
+
+        return Math.round(amount * config.common.restedXpMultiplier);
     }
 
     @Inject(at = {@At("HEAD")}, method = {"getFoodData"})

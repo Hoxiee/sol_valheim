@@ -100,6 +100,9 @@ public class ModConfig extends PartitioningSerializer.GlobalData {
         @ConfigEntry.Gui.Tooltip() @Comment("Health regeneration multiplier while Rested")
         public float restedRegenMultiplier = 1.5F;
 
+        @ConfigEntry.Gui.Tooltip() @Comment("Experience point multiplier while Rested - Valheim's hidden skill xp bonus (1 disables)")
+        public float restedXpMultiplier = 1.5F;
+
         @ConfigEntry.Gui.Tooltip() @Comment("Fraction of every dish's remaining time kept after dying (0 loses everything, 1 keeps everything)")
         public float keepFoodPercentageOnDeath = 0F;
 
@@ -293,6 +296,7 @@ public class ModConfig extends PartitioningSerializer.GlobalData {
             keepFoodPercentageOnDeath = Mth.clamp(keepFoodPercentageOnDeath, 0f, 1f);
             restedDurationSeconds = Mth.clamp(restedDurationSeconds, 30, 60 * 60 * 24);
             restedRegenMultiplier = Mth.clamp(restedRegenMultiplier, 1f, 10f);
+            restedXpMultiplier = Mth.clamp(restedXpMultiplier, 1f, 10f);
             foodDecayStartFraction = Mth.clamp(foodDecayStartFraction, 0f, 1f);
             foodDecayMinFraction = Mth.clamp(foodDecayMinFraction, 0f, 1f);
             emptyStomachWeakness = Mth.clamp(emptyStomachWeakness, 0, 5);

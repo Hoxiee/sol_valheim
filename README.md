@@ -82,6 +82,8 @@ awarded for the full Valheim ritual: the bed has to sit under a roof with fire b
 blocks — sleep anywhere else and you wake up just as tired. Waking up from a full
 night also restores your health to its current maximum (`healFullOnSleep`).
 The effect icon and its countdown are vanilla's own; `restedEnabled` turns the whole thing off.
+Like its Valheim namesake, Rested also boosts **experience** — every point you pick up is worth
++50 % more (`restedXpMultiplier`), from mob kills and ore to fishing, trading and furnaces.
 
 ## Food values
 
@@ -283,6 +285,7 @@ cannot run.
 | `restedEnabled` | true | Grant the Rested effect for sleeping in a bed under a roof, near fire. |
 | `restedDurationSeconds` | 480 | Seconds of Rested per grant. |
 | `restedRegenMultiplier` | 1.5 | Food regeneration multiplier while Rested. |
+| `restedXpMultiplier` | 1.5 | Experience point multiplier while Rested; 1 disables the bonus. |
 | `vanillaRegeneration` | false | Keep vanilla natural regeneration as well. |
 | `syncFoodValuesToClients` | true | Send resolved values to clients so HUD and tooltips match the server. |
 | `persistGeneratedFoodValues` | true | Write generated values into the config for hand editing. |
