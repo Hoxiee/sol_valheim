@@ -514,7 +514,7 @@ public class ModConfig extends PartitioningSerializer.GlobalData {
         /** Same fields as the regen dial, but defaults to hugging the hearts from the right. */
         public static class SprintComponentConfig extends RegenComponentConfig {
             public SprintComponentConfig() {
-                xOffset = -94;
+                xOffset = 94;
                 yOffset = -39;
             }
         }
