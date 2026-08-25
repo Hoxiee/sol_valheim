@@ -91,7 +91,14 @@ public final class TextPlural {
             ? formatValue(count, lang, 2)
             : countStr;
 
+        #if PRE_CURRENT_MC_1_19_2
+        // 1.19.2 has neither translatableWithFallback nor a non-string getSelected()
+        if (finalKey != null)
+            return Component.translatable(finalKey, count);
+        return Component.literal(formattedCount + " " + baseKey);
+        #elif POST_CURRENT_MC_1_20_1
         return Component.translatableWithFallback(finalKey, formattedCount + " " + baseKey, count);
+        #endif
     }
 
     // ----------------------- LANGUAGE RULES -----------------------
@@ -144,10 +151,14 @@ public final class TextPlural {
 
     private static String getCurrentLanguageCode() {
         try {
+            #if PRE_CURRENT_MC_1_19_2
+            String code = Minecraft.getInstance().getLanguageManager().getSelected().getCode();
+            #elif POST_CURRENT_MC_1_20_1
             String code = Minecraft.getInstance()
                 .getLanguageManager()
                 .getSelected()
                 .toLowerCase(Locale.ROOT);
+            #endif
             int underscore = code.indexOf('_');
             return (underscore >= 0) ? code.substring(0, underscore) : code;
         } catch (Exception e) {

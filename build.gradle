@@ -1,7 +1,6 @@
 plugins {
     id "architectury-plugin" version "${arch_plugin_version}"
     id "dev.architectury.loom" version "${loom_version}" apply false
-    id "io.github.juuxel.loom-vineflower" version "${vineflower_version}" apply false
     id "io.github.pacifistmc.forgix" version "${forgix_version}"
     id "me.modmuss50.mod-publish-plugin" version "0.3.4" apply false // https://github.com/modmuss50/mod-publish-plugin
 }
@@ -10,6 +9,7 @@ plugins {
 def mcVersionToAccessWidenerVersion = [
         "1.19.2": "1_19_2",
         "1.20.1": "1_20_1",
+        "1.21.1": "1_21_1",
 ]
 ext.set("access_wideners", mcVersionToAccessWidenerVersion)
 
@@ -18,9 +18,18 @@ makeAccessWidener()
 defineMixins()
 
 forgix {
-    group = maven_group
-    mergedJarName = "${modid}-${mod_version}${getBuildNumber()}+mc${minecraft_version}.jar"
-    outputDir = "build/libs/merged"
+    destinationDirectory = layout.projectDirectory.dir("build/libs/merged")
+    archiveVersion = "${modid}-${mod_version}${getBuildNumber()}+mc${minecraft_version}"
+    silence = true
+
+    // forge is only a target while it still exists: Architectury API ships no Forge builds past 1.20.x
+    if (minecraft_version >= "1.21") {
+        fabric()
+        neoforge()
+    } else {
+        fabric()
+        forge()
+    }
 }
 
 architectury {
@@ -29,9 +38,10 @@ architectury {
 
 subprojects {
     apply plugin: "dev.architectury.loom"
-    apply plugin: "io.github.juuxel.loom-vineflower"
 
-    def isForge = it == project(":forge")
+    // :forge only exists on targets that still ship it
+    def forgeProject = findProject(":forge")
+    def isForge = forgeProject != null && it == forgeProject
     def isFabric = it == project(":fabric")
     def isCommon = it == project(":common")
 
@@ -70,29 +80,31 @@ subprojects {
         addJarCompile
         addJarRuntime
         addJarEverywhere
-
-        if (!isCommon) {
-            include.extendsFrom addJar
-        }
-        if(isForge)
-            forgeRuntimeLibrary.extendsFrom addJar
-
-        compileOnly.extendsFrom addJarCompile
-        annotationProcessor.extendsFrom addJarCompile
-        implementation.extendsFrom addJarRuntime
-        api.extendsFrom addJarEverywhere
-
-        addJar.extendsFrom addJarCompile
-        addJar.extendsFrom addJarRuntime
-        addJar.extendsFrom addJarEverywhere
-
-        implementation.extendsFrom shade
     }
+
+    // named() lookups: newer Gradle resolves bare configuration names to providers inside this block
+    if (!isCommon) {
+        configurations.named("include") { it.extendsFrom(configurations.addJar) }
+    }
+    if (isForge) {
+        configurations.named("forgeRuntimeLibrary") { it.extendsFrom(configurations.addJar) }
+    }
+    configurations.named("compileOnly") { it.extendsFrom(configurations.addJarCompile) }
+    configurations.named("annotationProcessor") { it.extendsFrom(configurations.addJarCompile) }
+    configurations.named("implementation") { it.extendsFrom(configurations.addJarRuntime) }
+    configurations.named("api") { it.extendsFrom(configurations.addJarEverywhere) }
+    configurations.named("addJar") {
+        it.extendsFrom(configurations.addJarCompile)
+        it.extendsFrom(configurations.addJarRuntime)
+        it.extendsFrom(configurations.addJarEverywhere)
+    }
+    configurations.named("implementation") { it.extendsFrom(configurations.shade) }
 
     repositories {
         mavenCentral()
         maven { url "https://maven.parchmentmc.org" }
         maven { url "https://maven.quiltmc.org/repository/release" }
+        maven { url = "https://maven.neoforged.net/releases" } // NeoForge
         maven {
             url "https://maven.tterrag.com/"
             content {
@@ -114,24 +126,37 @@ subprojects {
     dependencies {
         minecraft "com.mojang:minecraft:${rootProject.minecraft_version}"
         mappings(loom.layered {
-            it.mappings("org.quiltmc:quilt-mappings:${rootProject.minecraft_version}+build.${rootProject.quilt}:intermediary-v2")
-            it.parchment("org.parchmentmc.data:parchment-${rootProject.minecraft_version}:${rootProject.parchment}@zip")
-            it.officialMojangMappings { nameSyntheticMembers = false }
+            // quilt mappings stopped tracking new versions - newer targets run mojmap + parchment only
+            if (rootProject.hasProperty("quilt") && rootProject.quilt?.trim()) {
+                it.mappings("org.quiltmc:quilt-mappings:${rootProject.minecraft_version}+build.${rootProject.quilt}:intermediary-v2")
+            }
+            // No parchment: its layer corrupts the composed mappings on every loom this build can use
+            // (1.10/1.14/1.17) - the official column comes out holding mojmap names instead of the
+            // obfuscated ones, so nothing in the game jar gets remapped and every net.minecraft class
+            // fails to resolve. Class/method/field names come from officialMojangMappings() either
+            // way; only parameter names inside vanilla sources are lost. Re-add once loom is fixed.
+            it.officialMojangMappings()
         })
 
         annotationProcessor "systems.manifold:manifold-preprocessor:${rootProject.manifold_version}"
 
         if (isFabric) {
             modImplementation("me.shedaniel.cloth:cloth-config-fabric:${rootProject.cloth_config_version}")
-            modRuntimeOnly("curse.maven:farmers-delight-fabric-482834:${rootProject.fabric_farmers_delight}")
-            modRuntimeOnly("curse.maven:rei-fabric-310111:${rootProject.fabric_rei}")
-            modRuntimeOnly("curse.maven:carpet-349239:${rootProject.carpet}")
+            // optional runtime-only test mods; not every target ships curse.maven pins for these
+            if (rootProject.findProperty("fabric_farmers_delight"))
+                modRuntimeOnly("curse.maven:farmers-delight-fabric-482834:${rootProject.fabric_farmers_delight}")
+            if (rootProject.findProperty("fabric_rei"))
+                modRuntimeOnly("curse.maven:rei-fabric-310111:${rootProject.fabric_rei}")
+            if (rootProject.findProperty("carpet"))
+                modRuntimeOnly("curse.maven:carpet-349239:${rootProject.carpet}")
         }
 
         if (isForge) {
             modImplementation("me.shedaniel.cloth:cloth-config-forge:${rootProject.cloth_config_version}")
-            modRuntimeOnly("curse.maven:farmers-delight-398521:${rootProject.farmers_delight}")
-            modRuntimeOnly("curse.maven:rei-310111:${rootProject.rei}")
+            if (rootProject.findProperty("farmers_delight"))
+                modRuntimeOnly("curse.maven:farmers-delight-398521:${rootProject.farmers_delight}")
+            if (rootProject.findProperty("rei"))
+                modRuntimeOnly("curse.maven:rei-310111:${rootProject.rei}")
         }
     }
 
@@ -141,11 +166,18 @@ subprojects {
                 aw	 			 : access_widener,
                 version          : mod_version,
                 minecraft_version: minecraft_version,
-                display_name     : display_name,
-                forge            : forge.split("\\.")[0],
-                fabric           : fabric,
-                fabric_api       : fabric_api
+                display_name     : display_name
         ]
+
+        // per-loader keys exist only on the targets that still ship that loader
+        if (rootProject.hasProperty("forge"))
+            properties.put("forge", forge.split("\\.")[0])
+        if (rootProject.hasProperty("neoforge"))
+            properties.put("neoforge", neoforge)
+        if (rootProject.hasProperty("fabric")) {
+            properties.put("fabric", fabric)
+            properties.put("fabric_api", fabric_api)
+        }
 
         inputs.properties properties
 
@@ -160,6 +192,10 @@ subprojects {
         filesMatching("META-INF/mods.toml") {
             expand properties
         }
+
+        filesMatching("META-INF/neoforge.mods.toml") {
+            expand properties
+        }
     }
 }
 
@@ -168,7 +204,10 @@ allprojects {
     apply plugin: "architectury-plugin"
     apply plugin: "maven-publish"
 
-    archivesBaseName = rootProject.modid
+    // Gradle 9 replaced the archivesBaseName property with base.archivesName
+    base {
+        archivesName = rootProject.modid
+    }
     version = rootProject.mod_version + getBuildNumber()
     group = rootProject.maven_group
 
@@ -179,7 +218,8 @@ allprojects {
 
     tasks.withType(JavaCompile).configureEach {
         options.encoding = "UTF-8"
-        options.release = 17
+        // 1.20.5+ runs on Java 21; older targets stay on the 17 bytecode they shipped with
+        options.release = rootProject.minecraft_version >= "1.21" ? 21 : 17
         options.compilerArgs += ['-Xplugin:Manifold']
     }
 

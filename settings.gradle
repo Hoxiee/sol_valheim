@@ -9,4 +9,27 @@ pluginManagement {
 
 include("common")
 include("fabric")
-include("forge")
+
+// Forge stopped shipping past 1.20.x and NeoForge did not exist before 1.20.2, so a loader
+// project only joins the build when the selected target actually has a version for it.
+// Mirrors loadProperties(): command line -PmcVer wins over gradle.properties, an unknown
+// version falls back to default_mc_version.
+def gradleProps = new Properties()
+new File(settingsDir, "gradle.properties").withInputStream { gradleProps.load(it) }
+
+def mcVersions = (gradleProps.getProperty("mc_versions") ?: "").split(", ").toList()
+// command line -PmcVer wins over the gradle.properties value
+def target = gradle.startParameter.projectProperties.get("mcVer")
+        ?: gradleProps.getProperty("mcVer")
+if (!(target in mcVersions))
+    target = gradleProps.getProperty("default_mc_version", mcVersions ? mcVersions[0] : null)
+
+def versionProps = new Properties()
+def versionFile = new File(settingsDir, "${target}.properties")
+if (versionFile.isFile())
+    versionProps.load(new FileInputStream(versionFile))
+
+if (versionProps.getProperty("forge"))
+    include("forge")
+if (versionProps.getProperty("neoforge"))
+    include("neoforge")

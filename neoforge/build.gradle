@@ -1,69 +1,40 @@
-
 plugins {
     id "com.gradleup.shadow" version "$shadow_version"
     id "me.modmuss50.mod-publish-plugin"
 }
 
 // loom 1.17 picks the platform from this project property before any configuration runs
-ext["loom.platform"] = "forge"
+ext["loom.platform"] = "neoforge"
 
 architectury {
     platformSetupLoomIde()
-    forge()
+    neoForge()
 }
-
-def generatedResources = file("src/generated")
 
 configurations {
     common
     shadowCommon // Don't use shadow from the shadow plugin because we don't want IDEA to index this.
     compileClasspath.extendsFrom common
     runtimeClasspath.extendsFrom common
-    developmentForge.extendsFrom common
+    developmentNeoForge.extendsFrom common
 }
 
 repositories {
-    // mavens for Forge-exclusives
-    maven { url = "https://maven.theillusivec4.top/" } // Curios
-    maven { // Create Forge and Registrate Forge
-        url = "https://maven.tterrag.com/"
-        content {
-            includeGroup("com.tterrag.registrate")
-            includeGroup("com.simibubi.create")
-        }
-    }
-}
-
-loom {
-    forge {
-        //convertAccessWideners = true
-        //extraAccessWideners.add loom.accessWidenerPath.get().asFile.name
-        mixinConfig("${archives_base_name}-common.mixins.json", "${archives_base_name}.mixins.json")
-    }
-
-    runs {
-        data {
-            data()
-            name "Forge Datagen"
-
-            programArgs "--all", "--mod", "logic_n_control"
-            vmArg '-Dforge.logging.markers=REGISTRIES'
-            vmArg '-Dforge.logging.console.level=debug'
-            programArgs "--output", "${project.rootProject.file("forge/src/generated/resources")}"
-            programArgs "--existing", "${project.rootProject.file("common/src/main/resources")}"
-            programArgs "--existing-mod", "create"
-            programArgs "--flat"
-        }
-    }
+    maven { url "https://maven.shedaniel.me/" }
 }
 
 dependencies {
-    forge "net.minecraftforge:forge:${rootProject.minecraft_version}-${rootProject.forge}"
-    common(project(path: ":common", configuration: "namedElements")) { transitive false }
-    shadowCommon(project(path: ":common", configuration: "transformProductionForge")) { transitive = false }
+    neoForge "net.neoforged:neoforge:${rootProject.neoforge}"
+    modImplementation "me.shedaniel.cloth:cloth-config-neoforge:${rootProject.cloth_config_version}"
 
-    modApi "dev.architectury:architectury-forge:${rootProject.architectury_version}"
+    modApi "dev.architectury:architectury-neoforge:${rootProject.architectury_version}"
+
+    common(project(path: ":common", configuration: "namedElements")) { transitive false }
+    shadowCommon(project(path: ":common", configuration: "transformProductionNeoForge")) { transitive false }
 }
+
+// mixin configs are declared in META-INF/neoforge.mods.toml ([[mixins]] blocks); unlike the
+// forge extension, loom's neoForge extension carries no mixinConfig method to restate them here
 
 shadowJar {
     exclude "fabric.mod.json"
@@ -98,10 +69,10 @@ components.java {
 
 publishMods {
     file = remapJar.archiveFile
-    version = "$mod_version-forge-mc$rootProject.minecraft_version"
+    version = "$mod_version-neoforge-mc$rootProject.minecraft_version"
     type = STABLE
-    displayName = "$display_name $mod_version Forge $rootProject.minecraft_version"
-    modLoaders.add("forge")
+    displayName = "$display_name $mod_version NeoForge $rootProject.minecraft_version"
+    modLoaders.add("neoforge")
     changelog = "View changelog at https://github.com/anthxnymc/$modid"
 
     curseforge {
@@ -135,14 +106,12 @@ publishMods {
 
 publishing {
     publications {
-        mavenForge(MavenPublication) {
+        mavenNeoForge(MavenPublication) {
             artifactId = rootProject.modid + "-" + project.name
             from components.java
         }
     }
 
-    // See https://docs.gradle.org/current/userguide/publishing_maven.html for information on how to set up publishing.
     repositories {
-        // Add repositories to publish to here.
     }
 }
