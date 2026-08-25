@@ -1,0 +1,14 @@
+{
+  "parent": "sol_valheim:first_meal",
+  "display": {
+    "icon": { "item": "minecraft:golden_apple" },
+    "title": { "translate": "advancements.sol_valheim.full_table.title" },
+    "description": { "translate": "advancements.sol_valheim.full_table.description" },
+    "frame": "goal",
+    "show_toast": true,
+    "announce_to_chat": true
+  },
+  "criteria": {
+    "granted": { "trigger": "minecraft:impossible" }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "parent": "sol_valheim:root",
+  "display": {
+    "icon": { "item": "minecraft:milk_bucket" },
+    "title": { "translate": "advancements.sol_valheim.refreshed.title" },
+    "description": { "translate": "advancements.sol_valheim.refreshed.description" },
+    "frame": "task",
+    "show_toast": true,
+    "announce_to_chat": true
+  },
+  "criteria": {
+    "granted": { "trigger": "minecraft:impossible" }
+  }
+}

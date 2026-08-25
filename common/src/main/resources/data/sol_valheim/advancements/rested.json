@@ -1,0 +1,14 @@
+{
+  "parent": "sol_valheim:first_meal",
+  "display": {
+    "icon": { "item": "minecraft:clock" },
+    "title": { "translate": "advancements.sol_valheim.rested.title" },
+    "description": { "translate": "advancements.sol_valheim.rested.description" },
+    "frame": "goal",
+    "show_toast": true,
+    "announce_to_chat": true
+  },
+  "criteria": {
+    "granted": { "trigger": "minecraft:impossible" }
+  }
+}
