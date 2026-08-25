@@ -360,6 +360,10 @@ preprocessor (`#if PRE_CURRENT_MC_1_19_2` / `#elif POST_CURRENT_MC_1_20_1`) agai
 
 ## Credits
 
-Originally by **anthxnymc**. Licensed under **GNU LGPL 3.0** — see [LICENSE](LICENSE).
+- **[anthxnymc](https://github.com/txnimc)** — original [SOL: Valheim](https://github.com/txnimc/sol_valheim)
+- **[kinghzrd](https://github.com/kinghzrd)** — [experimental-tweaks fork](https://github.com/kinghzrd/sol_valheim), the one this continues from
+- **[Hoxiee](https://github.com/Hoxiee)** — current maintenance, renamed to **SOL: Valheim Continued**
+
+Licensed under **GNU LGPL 3.0** — see [LICENSE](LICENSE).
 
 Ships with English and Russian translations.
