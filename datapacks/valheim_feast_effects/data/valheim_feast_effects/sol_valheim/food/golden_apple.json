@@ -1,0 +1,8 @@
+{
+    "item": "minecraft:golden_apple",
+    "nutrition": 4,
+    "saturationModifier": 1.2,
+    "effects": [
+        { "id": "minecraft:absorption", "duration": 0.5, "amplifier": 1 }
+    ]
+}

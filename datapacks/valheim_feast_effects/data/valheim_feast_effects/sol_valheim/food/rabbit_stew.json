@@ -1,0 +1,9 @@
+{
+    "item": "minecraft:rabbit_stew",
+    "nutrition": 10,
+    "saturationModifier": 0.6,
+    "effects": [
+        { "id": "minecraft:speed", "duration": 1.0, "amplifier": 1 },
+        { "id": "minecraft:absorption", "duration": 0.25, "amplifier": 1 }
+    ]
+}

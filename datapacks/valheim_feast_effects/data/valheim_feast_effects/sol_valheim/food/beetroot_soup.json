@@ -1,0 +1,8 @@
+{
+    "item": "minecraft:beetroot_soup",
+    "nutrition": 6,
+    "saturationModifier": 0.6,
+    "effects": [
+        { "id": "minecraft:jump_boost", "duration": 1.0, "amplifier": 1 }
+    ]
+}

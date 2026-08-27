@@ -216,6 +216,10 @@ The file name is a path, so a nested file like `sol_valheim/food/cooked_beef.jso
 `minecraft` targets `minecraft:cooked_beef`. Overrides for items that are not installed are skipped
 with a warning instead of breaking the reload — so one datapack can cover several optional mods.
 
+A worked example ships in this repo: [`datapacks/valheim_feast_effects`](datapacks/valheim_feast_effects/README.md)
+adds balanced dish effects (Speed stew, Haste pie, Night Vision carrots…) without touching any
+stats — vanilla inputs are mirrored so the balance model produces identical numbers.
+
 ### Item tags
 
 | Tag | Effect |

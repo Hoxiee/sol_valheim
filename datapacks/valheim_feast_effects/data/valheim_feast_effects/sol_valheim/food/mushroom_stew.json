@@ -1,0 +1,8 @@
+{
+    "item": "minecraft:mushroom_stew",
+    "nutrition": 6,
+    "saturationModifier": 0.6,
+    "effects": [
+        { "id": "minecraft:speed", "duration": 1.0, "amplifier": 1 }
+    ]
+}

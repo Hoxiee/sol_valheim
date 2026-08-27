@@ -1,0 +1,7 @@
+{
+    "pack": {
+        "pack_format": 48,
+        "supported_formats": {"min_inclusive": 10, "max_inclusive": 48},
+        "description": "SOL: Valheim - balanced dish effects. Effects reward cooking, not shopping."
+    }
+}

@@ -1,0 +1,9 @@
+{
+    "item": "minecraft:enchanted_golden_apple",
+    "nutrition": 4,
+    "saturationModifier": 1.2,
+    "effects": [
+        { "id": "minecraft:absorption", "duration": 1.0, "amplifier": 1 },
+        { "id": "minecraft:fire_resistance", "duration": 0.15, "amplifier": 1 }
+    ]
+}

@@ -1,0 +1,8 @@
+{
+    "item": "minecraft:pumpkin_pie",
+    "nutrition": 8,
+    "saturationModifier": 0.4,
+    "effects": [
+        { "id": "minecraft:haste", "duration": 1.0, "amplifier": 1 }
+    ]
+}

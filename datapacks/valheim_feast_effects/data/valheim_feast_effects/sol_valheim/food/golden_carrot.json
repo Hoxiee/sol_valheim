@@ -1,0 +1,8 @@
+{
+    "item": "minecraft:golden_carrot",
+    "nutrition": 6,
+    "saturationModifier": 1.2,
+    "effects": [
+        { "id": "minecraft:night_vision", "duration": 1.0, "amplifier": 1 }
+    ]
+}
