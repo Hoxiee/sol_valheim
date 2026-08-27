@@ -10,6 +10,8 @@ import net.minecraft.commands.Commands;
 import net.minecraft.commands.arguments.EntityArgument;
 import net.minecraft.commands.arguments.item.ItemArgument;
 import net.minecraft.commands.arguments.item.ItemInput;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
+
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 import vice.sol_valheim.accessors.PlayerEntityMixinDataAccessor;
@@ -61,7 +63,30 @@ public final class SOLValheimCommands
                     .then(Commands.argument("targets", EntityArgument.players())
                             .executes(ctx -> clear(ctx.getSource(), EntityArgument.getPlayers(ctx, "targets")))));
 
-            // hands a dish straight to a player - for map makers and testing food values
+            // runtime cap control - the bridge between config-time maxSlots and a player's
+            // actual slot cap. `add` is a delta so mob-effect addons can hand out a temporary
+            // bump without knowing the player's current cap.
+            root.then(Commands.literal("slots")
+                    .requires(source -> source.hasPermission(2))
+                    .then(Commands.literal("set")
+                            .then(Commands.argument("amount", IntegerArgumentType.integer(1, ValheimFoodData.SLOT_LIMIT))
+                                    .executes(ctx -> setSlots(ctx.getSource(),
+                                            IntegerArgumentType.getInteger(ctx, "amount"),
+                                            List.of(ctx.getSource().getPlayerOrException())))
+                                    .then(Commands.argument("targets", EntityArgument.players())
+                                            .executes(ctx -> setSlots(ctx.getSource(),
+                                                    IntegerArgumentType.getInteger(ctx, "amount"),
+                                                    EntityArgument.getPlayers(ctx, "targets"))))))
+                    .then(Commands.literal("add")
+                            .then(Commands.argument("delta", IntegerArgumentType.integer(-ValheimFoodData.SLOT_LIMIT + 1, ValheimFoodData.SLOT_LIMIT - 1))
+                                    .executes(ctx -> addSlots(ctx.getSource(),
+                                            IntegerArgumentType.getInteger(ctx, "delta"),
+                                            List.of(ctx.getSource().getPlayerOrException())))
+                                    .then(Commands.argument("targets", EntityArgument.players())
+                                            .executes(ctx -> addSlots(ctx.getSource(),
+                                                    IntegerArgumentType.getInteger(ctx, "delta"),
+                                                    EntityArgument.getPlayers(ctx, "targets")))))));
+
             root.then(Commands.literal("grant")
                     .requires(source -> source.hasPermission(2))
                     .then(Commands.argument("item", ItemArgument.item(context))
@@ -129,6 +154,26 @@ public final class SOLValheimCommands
 
         reply(source, Component.translatable("commands.sol_valheim.cleared", targets.size()).withStyle(ChatFormatting.GREEN));
         return targets.size();
+    }
+
+    private static int setSlots(CommandSourceStack source, int amount, Collection<ServerPlayer> targets) {
+        int changed = 0;
+        for (var player : targets)
+            if (SOLValheimSlots.setMaxSlots(player, amount)) changed++;
+
+        reply(source, Component.translatable("commands.sol_valheim.slots.set", amount, changed)
+                .withStyle(ChatFormatting.GREEN));
+        return changed;
+    }
+
+    private static int addSlots(CommandSourceStack source, int delta, Collection<ServerPlayer> targets) {
+        int changed = 0;
+        for (var player : targets)
+            if (SOLValheimSlots.addMaxSlots(player, delta)) changed++;
+
+        reply(source, Component.translatable("commands.sol_valheim.slots.add", delta, changed)
+                .withStyle(ChatFormatting.GREEN));
+        return changed;
     }
 
     /**

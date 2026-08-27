@@ -36,5 +36,8 @@
   "commands.sol_valheim.balance.effort": "Priced %s craftable items, crafting cost weight x%s:",
   "commands.sol_valheim.balance.top": "Strongest %s dishes:",
   "commands.sol_valheim.balance.outliers": "Above %s hearts, vanilla's best dish:",
-  "commands.sol_valheim.balance.clean": "Nothing towers over vanilla - the table is balanced"
+  "commands.sol_valheim.balance.clean": "Nothing towers over vanilla - the table is balanced",
+  "commands.sol_valheim.slots.set": "Set food slots to %s for %s player(s)",
+  "commands.sol_valheim.slots.add": "Changed food slots by %s for %s player(s)",
+  "tooltip.sol_valheim.slots_changed": "Food slot cap: %s"
 }

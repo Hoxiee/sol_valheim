@@ -117,8 +117,8 @@ public abstract class PlayerEntityMixin extends LivingEntity implements PlayerEn
         if (data == null)
             return;
 
-        // the config, not whoever handed us the data, decides how many slots exist
-        data.MaxItemSlots = ValheimFoodData.configuredMaxSlots();
+        // no longer clobbering data.MaxItemSlots here: the new SOLValheimSlots API can raise or
+        // lower the cap at runtime, and the saved/incoming data may carry that runtime value
         data.trimToSlots();
 
         sol_valheim$food_data = data;
@@ -332,9 +332,13 @@ public abstract class PlayerEntityMixin extends LivingEntity implements PlayerEn
 
         var changed = false;
 
-        // let a config change to maxSlots reach players who are already in the world
+        // let a config change to maxSlots reach players who are already in the world. Tracked
+        // against lastConfiguredSlots, not against MaxItemSlots: a runtime override set through
+        // SOLValheimSlots marks the current config as consumed, so the periodic resync does not
+        // spend the next 100 ticks quietly resetting a command's or an addon's change
         var slots = ValheimFoodData.configuredMaxSlots();
-        if (sol_valheim$food_data.MaxItemSlots != slots) {
+        if (sol_valheim$food_data.lastConfiguredSlots != slots) {
+            sol_valheim$food_data.lastConfiguredSlots = slots;
             sol_valheim$food_data.MaxItemSlots = slots;
             changed |= sol_valheim$food_data.trimToSlots();
         }
@@ -702,12 +706,13 @@ public abstract class PlayerEntityMixin extends LivingEntity implements PlayerEn
 
         var loaded = ValheimFoodData.read(nbt.getCompound("sol_food_data"));
 
-        // the config, not the save file, decides how many slots a player has
-        sol_valheim$food_data.MaxItemSlots = ValheimFoodData.configuredMaxSlots();
+        // honour whatever cap the save file carried over (it may be a runtime override from
+        // /solvalheim slots or a mob-effect addon); the configuredMaxSlots() fallback is now
+        // baked into ValheimFoodData.read for old save data that did not persist MaxItemSlots
+        sol_valheim$food_data.MaxItemSlots = loaded.MaxItemSlots;
         sol_valheim$food_data.DrinkSlot = loaded.DrinkSlot;
         sol_valheim$food_data.ItemEntries = new ArrayList<>(loaded.ItemEntries);
         sol_valheim$food_data.trimToSlots();
-
         sol_valheim$sync();
     }
 

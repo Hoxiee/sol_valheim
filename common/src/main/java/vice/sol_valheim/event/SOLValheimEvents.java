@@ -29,5 +29,12 @@ public final class SOLValheimEvents
     public static final Event<FoodEatenCallback> FOOD_EATEN = EventFactory.createLoop(FoodEatenCallback.class);
     public static final Event<FoodExpiredCallback> FOOD_EXPIRED = EventFactory.createLoop(FoodExpiredCallback.class);
 
+    public interface SlotsChangedCallback
+    {
+        void onSlotsChanged(Player player, int oldSlots, int newSlots);
+    }
+
+    public static final Event<SlotsChangedCallback> SLOTS_CHANGED = EventFactory.createLoop(SlotsChangedCallback.class);
+
     private SOLValheimEvents() {}
 }

@@ -36,5 +36,8 @@
   "commands.sol_valheim.balance.effort": "Оценено крафтящихся предметов: %s, вес сложности крафта x%s:",
   "commands.sol_valheim.balance.top": "Самые сильные блюда (%s):",
   "commands.sol_valheim.balance.outliers": "Сильнее %s сердец - лучшего ванильного блюда:",
-  "commands.sol_valheim.balance.clean": "Ничего не выбивается за ваниль - таблица сбалансирована"
+  "commands.sol_valheim.balance.clean": "Ничего не выбивается за ваниль - таблица сбалансирована",
+  "commands.sol_valheim.slots.set": "Слотов еды установлено: %s, игроков: %s",
+  "commands.sol_valheim.slots.add": "Слотов еды изменено на %s, игроков: %s",
+  "tooltip.sol_valheim.slots_changed": "Лимит слотов еды: %s"
 }

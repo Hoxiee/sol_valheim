@@ -105,6 +105,15 @@ public class ValheimFoodData
      */
     public int MaxItemSlots = configuredMaxSlots();
 
+    /**
+     * The {@link #configuredMaxSlots()} value this instance last agreed with. The server tick
+     * compares against this field instead of against {@link #MaxItemSlots}, so a live config
+     * change still reaches in-world players while a runtime override set through
+     * {@link #setMaxItemSlots(int)} / {@code SOLValheimSlots} survives the periodic resync.
+     * Not persisted: on load it starts as "the config as of construction".
+     */
+    public transient int lastConfiguredSlots = configuredMaxSlots();
+
     /** The configured slot count, clamped, and safe to call before the config has been loaded. */
     public static int configuredMaxSlots() {
         var config = SOLValheim.Config;
@@ -143,6 +152,29 @@ public class ValheimFoodData
 
     public int getMaxItemSlots() {
         return MaxItemSlots > 0 ? Math.min(MaxItemSlots, SLOT_LIMIT) : configuredMaxSlots();
+    }
+
+    /**
+     * Server-authoritative mutator. Sets the absolute slot cap, drops the closest-to-expiring
+     * entries when shrinking, and returns whether anything actually changed.
+     * <p>
+     * Refuses the call rather than silently clamping: callers (commands, addons, the new
+     * {@code SLOTS_CHANGED} event) need to know whether the value was accepted so they can decide
+     * what to do (reply, suppress a follow-up effect, etc.). No-op when the new value matches the
+     * current effective cap - the caller has already changed it to the same thing.
+     */
+    public boolean setMaxItemSlots(int slots) {
+        if (slots < 1 || slots > SLOT_LIMIT)
+            return false;
+
+        int current = getMaxItemSlots();
+        if (slots == current)
+            return false;
+
+        MaxItemSlots = slots;
+        lastConfiguredSlots = configuredMaxSlots();
+        trimToSlots();
+        return true;
     }
 
     /** @return true when the food was actually taken, so callers know whether to sync. */
