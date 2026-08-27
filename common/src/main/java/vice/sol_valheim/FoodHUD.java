@@ -38,7 +38,6 @@ import vice.sol_valheim.mixin.LivingEntityDamageAccessor;
 import vice.sol_valheim.utils.RegistryHelper;
 
 import java.util.IdentityHashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -173,6 +172,48 @@ public class FoodHUD implements ClientGuiEvent.RenderHud
         }
     }
 
+    /**
+     * Single source of truth for where a slot lands on the HUD. {@code index} is zero-based
+     * (0 = the first food slot). {@code scale} is the uniform row shrink from
+     * {@code maxRowWidth} - it multiplies every length (step, anchor correction, per-slot
+     * nudges) by the same factor, so the layout is the default one, just smaller. Without
+     * {@code autoFit} the configured anchor keeps its historical meaning - the row starts one
+     * step away from it - so existing {@code xOffset}/{@code yOffset} configs render
+     * pixel-identical to the pre-helper layout whatever {@code totalSlots} is. With
+     * {@code autoFit} the anchor instead pins the slot picked by {@code autoFitMode}
+     * (rightmost / leftmost / midpoint of the row).
+     */
+    private static int[] computeSlotPos(int index, int totalSlots, int size, float scale,
+            ModConfig.Client.FoodComponentConfig cfg, int anchorX, int anchorY) {
+        int stepX = Math.round((size + 1) * cfg.xGap * scale);
+        int stepY = Math.round((size + 1) * cfg.yGap * scale);
+
+        // which slot the anchor pins; -1 is the historical "one step before the first slot" origin
+        int refIndex = -1;
+        if (cfg.autoFit && cfg.autoFitMode != null) {
+            refIndex = switch (cfg.autoFitMode) {
+                case RIGHT_EDGE -> stepX < 0 ? 0 : totalSlots - 1;
+                case LEFT_EDGE -> stepX > 0 ? 0 : totalSlots - 1;
+                case CENTER -> (totalSlots - 1) / 2;
+            };
+        }
+
+        int baseX = anchorX - stepX * refIndex;
+        int baseY = anchorY - stepY * refIndex;
+
+        int perSlotX = 0;
+        int perSlotY = 0;
+        if (cfg.slotOffsets != null && index >= 0 && index < cfg.slotOffsets.size() && cfg.slotOffsets.get(index) != null) {
+            var perSlot = cfg.slotOffsets.get(index);
+            perSlotX = perSlot.xOffset;
+            perSlotY = perSlot.yOffset;
+        }
+
+        int slotX = baseX + stepX * index + Math.round(perSlotX * scale);
+        int slotY = baseY + stepY * index + Math.round(perSlotY * scale);
+        return new int[] { slotX, slotY };
+    }
+
     public FoodHUD() {
         ClientGuiEvent.RENDER_HUD.register(this);
         client = Minecraft.getInstance();
@@ -208,13 +249,15 @@ public class FoodHUD implements ClientGuiEvent.RenderHud
     #if PRE_CURRENT_MC_1_19_2
     public void renderHud(PoseStack graphics, float tickDelta) {
     #elif MC_1_21_1
-    // architectury 13 passes the delta tracker instead of a raw float
     public void renderHud(GuiGraphics graphics, net.minecraft.client.DeltaTracker ignoredTickDelta) {
     #else
     public void renderHud(GuiGraphics graphics, float tickDelta) {
     #endif
+
+
         if (client.player == null)
             return;
+
 
         if (client.player.isCreative() || client.player.isSpectator())
             return;
@@ -253,29 +296,59 @@ public class FoodHUD implements ClientGuiEvent.RenderHud
             }
         }
 
-        int offset = 1;
         boolean useLargeIcons = configData.useLargeIcons;
+
         int size = useLargeIcons ? 14 : 9;
         int width = (int) ((client.getWindow().getGuiScaledWidth() * foodHudConfig.xAnchor) + foodHudConfig.xOffset);
         int height = (int) ((client.getWindow().getGuiScaledHeight() * foodHudConfig.yAnchor) + foodHudConfig.yOffset - (useLargeIcons ? 6 : 0));
+
+        int anchorX;
+        int anchorY;
+        if (foodHudConfig.autoFit) {
+            anchorX = (int) (client.getWindow().getGuiScaledWidth() * foodHudConfig.autoFitAnchorX) + foodHudConfig.autoFitOffsetX;
+            anchorY = (int) (client.getWindow().getGuiScaledHeight() * foodHudConfig.autoFitAnchorY) + foodHudConfig.autoFitOffsetY;
+        } else {
+            anchorX = width;
+            anchorY = height;
+        }
+
+        int totalSlots = foodData.getMaxItemSlots() + 1; // food row + drink
+
+        // maxRowWidth: when the row would outgrow the budget, shrink it as a whole - icons,
+        // gaps and text all scale by the same factor, the geometry (which slot sits where
+        // relative to the others) never changes. A vertical layout (xGap == 0) has no width
+        // to bound and is left alone.
+        float scale = 1f;
+        if (foodHudConfig.maxRowWidth > 0 && totalSlots > 1 && foodHudConfig.xGap != 0) {
+            int rowWidth = size + Math.abs((size + 1) * foodHudConfig.xGap) * (totalSlots - 1);
+            if (rowWidth > foodHudConfig.maxRowWidth)
+                scale = foodHudConfig.maxRowWidth / (float) rowWidth;
+        }
+        int drawSize = Math.max(1, Math.round(size * scale));
+
+        int index = 0;
         // Food
         for (var food : foodData.ItemEntries) {
-            renderFoodSlot(graphics, food, width, size, offset, height, useLargeIcons);
-            offset++;
+            var pos = computeSlotPos(index, totalSlots, size, scale, foodHudConfig, anchorX, anchorY);
+            renderFoodSlot(graphics, food, pos[0], pos[1], useLargeIcons, drawSize, scale);
+            index++;
         }
         // Empty Food
         for (int i = 0; i < foodData.getMaxItemSlots() - foodData.ItemEntries.size(); i++) {
-            renderEmptyFoodSlot(graphics, offset, useLargeIcons, EMPTY_LARGE_SPRITE, EMPTY_SPRITE, FOOD_LARGE_SPRITE, FOOD_SPRITE, size, width, height, WHITE);
-            offset++;
+            var pos = computeSlotPos(index, totalSlots, size, scale, foodHudConfig, anchorX, anchorY);
+            renderEmptyFoodSlot(graphics, pos[0], pos[1], useLargeIcons, EMPTY_LARGE_SPRITE, EMPTY_SPRITE, FOOD_LARGE_SPRITE, FOOD_SPRITE, drawSize, WHITE);
+            index++;
         }
         // Drink
         if (foodData.DrinkSlot != null) {
-            renderFoodSlot(graphics, foodData.DrinkSlot, width, size, offset, height, useLargeIcons);
+            var pos = computeSlotPos(index, totalSlots, size, scale, foodHudConfig, anchorX, anchorY);
+            renderFoodSlot(graphics, foodData.DrinkSlot, pos[0], pos[1], useLargeIcons, drawSize, scale);
         } else {
-            renderEmptyFoodSlot(graphics, offset, useLargeIcons, EMPTY_LARGE_SPRITE, EMPTY_SPRITE, DRINK_LARGE_SPRITE, DRINK_SPRITE, size, width, height, WHITE);
+            var pos = computeSlotPos(index, totalSlots, size, scale, foodHudConfig, anchorX, anchorY);
+            renderEmptyFoodSlot(graphics, pos[0], pos[1], useLargeIcons, EMPTY_LARGE_SPRITE, EMPTY_SPRITE, DRINK_LARGE_SPRITE, DRINK_SPRITE, drawSize, WHITE);
         }
 
-        renderExpiryFlash(graphics, foodData, foodHudConfig, useLargeIcons, size, width, height);
+        renderExpiryFlash(graphics, foodData, foodHudConfig, useLargeIcons, size, scale, drawSize, anchorX, anchorY, totalSlots);
     }
 
     /**
@@ -284,7 +357,7 @@ public class FoodHUD implements ClientGuiEvent.RenderHud
      */
     private static void renderExpiryFlash(#if PRE_CURRENT_MC_1_19_2 PoseStack #elif POST_CURRENT_MC_1_20_1 GuiGraphics #endif graphics,
                                           ValheimFoodData foodData, ModConfig.Client.FoodComponentConfig foodHudConfig,
-                                          boolean useLargeIcons, int size, int width, int height) {
+                                          boolean useLargeIcons, int size, float scale, int drawSize, int anchorX, int anchorY, int totalSlots) {
         long now = Util.getMillis();
         if (now >= expiryFlashUntil)
             return;
@@ -292,34 +365,24 @@ public class FoodHUD implements ClientGuiEvent.RenderHud
         int alpha = (int) (255 * progress * (0.85f + 0.15f * Math.abs(Math.sin(now / 90d))));
         int color = FastColor.ARGB32.color(alpha, FastColor.ARGB32.red(YELLOW), FastColor.ARGB32.green(YELLOW), FastColor.ARGB32.blue(YELLOW));
 
-        // same geometry as renderEmptyFoodSlot; a drink frees the cell after the whole food row
-        int offset = expiryFlashIsDrink ? foodData.getMaxItemSlots() + 1 : foodData.ItemEntries.size() + 1;
-        var slotOffsets = foodHudConfig.slotOffsets;
-        var slotOffset = slotOffsets.size() >= offset ? slotOffsets.get(offset - 1) : null;
-        int startWidth = width + ((size + 1) * foodHudConfig.xGap * offset) + (slotOffset != null ? slotOffset.xOffset : 0);
-        int startHeight = height + ((size + 1) * foodHudConfig.yGap * offset) + (slotOffset != null ? slotOffset.yOffset : 0);
+        // same geometry as the slot loop. The dish is gone by the time the flash fires, so
+        // ItemEntries.size() is the slot it vanished from (the first empty one); a drink frees
+        // the cell after the whole food row. Death can empty the list entirely - the index then
+        // points at slot 0, never below it
+        int index = expiryFlashIsDrink ? totalSlots - 1 : foodData.ItemEntries.size();
+        var pos = computeSlotPos(index, totalSlots, size, scale, foodHudConfig, anchorX, anchorY);
         String outlineSprite = useLargeIcons ? OUTLINE_LARGE_SPRITE : OUTLINE_SPRITE;
-        blit(graphics, outlineSprite, size, size, startWidth, startHeight, color);
+        blit(graphics, outlineSprite, drawSize, drawSize, pos[0], pos[1], color);
     }
 
-    private static void renderEmptyFoodSlot(#if PRE_CURRENT_MC_1_19_2 PoseStack #elif POST_CURRENT_MC_1_20_1 GuiGraphics #endif graphics, int offset, boolean useLargeIcons, String bigPanelSprite, String panelSprite, String bigIconSprite, String iconSprite, int size, int width, int height, int color) {
-        String currentPanelSprite = useLargeIcons ? bigPanelSprite : panelSprite;
+    private static void renderEmptyFoodSlot(#if PRE_CURRENT_MC_1_19_2 PoseStack #elif POST_CURRENT_MC_1_20_1 GuiGraphics #endif graphics, int x, int y, boolean useLargeIcons, String bigPanelSprite, String panelSprite, String bigIconSprite, String iconSprite, int size, int color) {        String currentPanelSprite = useLargeIcons ? bigPanelSprite : panelSprite;
         String currentIconSprite = useLargeIcons ? bigIconSprite : iconSprite;
 
-        ModConfig.Client configData = SOLValheim.Config.client;
-        ModConfig.Client.FoodComponentConfig foodHudConfig = configData.foodHudConfig;
-        // the filled slots have always applied these, the empty ones used to ignore them and drift
-        var slotHudConfigs = foodHudConfig.slotOffsets;
-        var slotHudConfig = slotHudConfigs.size() >= offset ? slotHudConfigs.get(offset - 1) : null;
-
-        int startWidth = width + ((size + 1) * foodHudConfig.xGap * (offset)) + (slotHudConfig != null ? slotHudConfig.xOffset : 0);
-        int startHeight = height + ((size + 1) * foodHudConfig.yGap * (offset)) + (slotHudConfig != null ? slotHudConfig.yOffset : 0);
-
-        blit(graphics, currentPanelSprite, size, size, startWidth, startHeight, color);
-        blit(graphics, currentIconSprite, size, size, startWidth, startHeight, color);
+        blit(graphics, currentPanelSprite, size, size, x, y, color);
+        blit(graphics, currentIconSprite, size, size, x, y, color);
     }
 
-    private static void renderFoodSlot(#if PRE_CURRENT_MC_1_19_2 PoseStack #elif POST_CURRENT_MC_1_20_1 GuiGraphics #endif graphics, ValheimFoodData.EatenFoodItem food, int width, int size, int offset, int height, boolean useLargeIcons)
+    private static void renderFoodSlot(#if PRE_CURRENT_MC_1_19_2 PoseStack #elif POST_CURRENT_MC_1_20_1 GuiGraphics #endif graphics, ValheimFoodData.EatenFoodItem food, int x, int y, boolean useLargeIcons, int size, float rowScale)
     {
         if (food.item == null)
             return;
@@ -331,9 +394,6 @@ public class FoodHUD implements ClientGuiEvent.RenderHud
         var effectCount = foodConfig != null ? foodConfig.extraEffects.size() : 0;
 
         ModConfig.Client configData = SOLValheim.Config.client;
-        ModConfig.Client.FoodComponentConfig foodHudConfig = configData.foodHudConfig;
-        List<ModConfig.Client.SlotComponentConfig> slotHudConfigs = foodHudConfig.slotOffsets;
-        ModConfig.Client.SlotComponentConfig slotHudConfig = slotHudConfigs.size() >= offset ? slotHudConfigs.get(offset - 1) : null;
 
         var isDrink = ValheimFoodData.isDrinkable(food.item);
         boolean canEat = food.canEatEarly();
@@ -346,19 +406,12 @@ public class FoodHUD implements ClientGuiEvent.RenderHud
             decayShade = 0.5f + 0.5f * decayMode.heartsFactor(ticksLeftPercent,
                     SOLValheimClient.foodDecayStartFraction(), SOLValheimClient.foodDecayMinFraction());
 
-        int xOffset = (slotHudConfig != null) ? slotHudConfig.xOffset : 0;
-        int yOffset = (slotHudConfig != null) ? slotHudConfig.yOffset : 0;
-
-        int startWidth = width + ((size + 1) * foodHudConfig.xGap * (offset)) + xOffset;
-        int startHeight = height + ((size + 1) * foodHudConfig.yGap * (offset)) + yOffset;
-
         // todo replace drink background to use a different sprite instead of tinting
         int bgColor = isDrink ? FastColor.ARGB32.color(200, 26, 52, 81) : FastColor.ARGB32.color(180, 0, 0, 0);
         int barColor = canEat ? YELLOW : WHITE;
         int barBgColor = canEat ? YELLOW_BG : WHITE_BG;
 
         var time = (float) food.ticksLeft / (20 * 60);
-        var scale = useLargeIcons ? 0.75f : 0.5f;
         var isSeconds = false;
 
         if (time < 1f) {
@@ -367,26 +420,25 @@ public class FoodHUD implements ClientGuiEvent.RenderHud
         }
         var minutes = Integer.toString((int) Math.floor(time + 0.5));
 
-        var pose = #if PRE_CURRENT_MC_1_19_2 graphics #elif POST_CURRENT_MC_1_20_1 graphics.pose() #endif;
-
         // Background
         String panelTexture = useLargeIcons ? PANEL_LARGE_SPRITE : PANEL_SPRITE;
-        blit(graphics, panelTexture, size, size, startWidth, startHeight, bgColor);
+        blit(graphics, panelTexture, size, size, x, y, bgColor);
         // Meter Background
         String bgTexture = useLargeIcons ? BACKGROUND_LARGE_SPRITE : BACKGROUND_SPRITE;
-        renderRadialBar(graphics, bgTexture, size, size, startWidth, startHeight, barBgColor, ticksLeftPercent);
+        renderRadialBar(graphics, bgTexture, size, size, x, y, barBgColor, ticksLeftPercent);
         // Outline
         String outlineTexture = useLargeIcons ? OUTLINE_LARGE_SPRITE : OUTLINE_SPRITE;
         var blinkIntensity = 1 - (Math.min(ticksLeftPercent, 0.5) / 0.5) ;
         var outlineAlpha = canEat ? 1 - (((Math.sin((double) food.ticksLeft / 5) / 2) + 0.5) * blinkIntensity) : 1;
         var outlineColor = FastColor.ARGB32.color((int) (outlineAlpha * 255), FastColor.ARGB32.red(barColor), FastColor.ARGB32.green(barColor), FastColor.ARGB32.blue(barColor));
-        renderRadialBar(graphics, outlineTexture, size, size, startWidth, startHeight, outlineColor, ticksLeftPercent);
+        renderRadialBar(graphics, outlineTexture, size, size, x, y, outlineColor, ticksLeftPercent);
 
-        // Item
-        pose.pushPose(); // Item/Text
-        pose.scale(scale, scale, scale);
-        pose.translate(startWidth * (useLargeIcons ? 0.3333f : 1f), startHeight * (useLargeIcons ? 0.3333f : 1f), 0f);
-
+        // Item - the 16px gui item is scaled down to fit the slot, with the same counter-translate
+        // the old code used so it lands back on the slot's own top-left. The row-scale wrap shrinks
+        // everything around the slot's top-left when maxRowWidth compressed the row, so the item,
+        // its position and the text below all shrink by the same factor. The pose is popped before
+        // any text draws, so the timer/effect numbers stay sharp and never see a scaled matrix
+        // longer than their own draw
         var displayItem = food.item;
         if (displayItem == Items.CAKE) {
             var slice = farmersDelightCakeSlice();
@@ -394,22 +446,43 @@ public class FoodHUD implements ClientGuiEvent.RenderHud
                 displayItem = slice;
         }
 
-        // startHeight, not height: the cake branch used to ignore the row offset and drew off place
+        var itemScale = useLargeIcons ? 0.75f : 0.5f;
+        var pose = #if PRE_CURRENT_MC_1_19_2 graphics #elif POST_CURRENT_MC_1_20_1 graphics.pose() #endif;
+        pose.pushPose();
+        if (rowScale != 1f) {
+            pose.translate(x, y, 0f);
+            pose.scale(rowScale, rowScale, rowScale);
+            pose.translate(-x, -y, 0f);
+        }
+        pose.scale(itemScale, itemScale, itemScale);
+        pose.translate(x * (useLargeIcons ? 0.3333f : 1f), y * (useLargeIcons ? 0.3333f : 1f), 0f);
+
         RenderSystem.setShaderColor(decayShade, decayShade, decayShade, 1f);
-        renderGUIItem(graphics, displayStack(displayItem), startWidth + 1, startHeight + 1);
+        renderGUIItem(graphics, displayStack(displayItem), x + 1, y + 1);
         RenderSystem.setShaderColor(1f, 1f, 1f, 1f);
 
-        // Text
+        pose.popPose();
+
+        // Text - large icons overlay timer + effect badge. Both are scaled to 0.75 about the
+        // slot's own top-left, which is the size they historically rendered at (they used to
+        // live inside the same 0.75 pose as the item); unscaled, the 9px glyphs overflow the
+        // 14px slot. rowScale multiplies in so a maxRowWidth-compressed row shrinks its text
+        // along with everything else
         if (useLargeIcons && (configData.showTimerText || effectCount > 0)) {
-            pose.pushPose(); // Text
-            pose.translate(0.0f, 0.0f, 200.0f);
+            float textScale = 0.75f * rowScale;
+            pose.pushPose();
+            pose.translate(x, y, 0f);
+            pose.scale(textScale, textScale, textScale);
+            pose.translate(-x, -y, 0f);
+            // the item sprite writes depth, so the text has to ride above it - the historical
+            // code carried the same +200 bump, without it the timer hides behind the food
+            pose.translate(0f, 0f, 200f);
             if (configData.showTimerText)
-                drawFont(graphics, minutes, startWidth + (minutes.length() > 1 ? 6 : 12), startHeight + 10, isSeconds ? RED : WHITE);
+                drawFont(graphics, minutes, x + (minutes.length() > 1 ? 6 : 12), y + 10, isSeconds ? RED : WHITE);
             if (effectCount > 0)
-                drawFont(graphics, "+" + effectCount, startWidth + 6, startHeight, YELLOW);
-            pose.popPose(); // Text
+                drawFont(graphics, "+" + effectCount, x + 6, y, YELLOW);
+            pose.popPose();
         }
-        pose.popPose(); // Item/Text
     }
 
     private static void blit(#if PRE_CURRENT_MC_1_19_2 PoseStack #elif POST_CURRENT_MC_1_20_1 GuiGraphics #endif graphics, String texture, int width, int height, int x, int y, int color) {
