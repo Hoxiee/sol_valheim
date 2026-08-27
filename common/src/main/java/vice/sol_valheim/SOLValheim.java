@@ -102,9 +102,10 @@ public class SOLValheim
 		// datapacks get the last word on food values, so re-resolve on every data reload
 		ReloadListenerRegistry.register(PackType.SERVER_DATA, FoodConfigManager.datapackListener(),
 				vice.sol_valheim.utils.RegistryHelper.of(MOD_ID, "food_values"));
-
-		// runs once every mod has registered its items, which is when the item registry is complete
-		LifecycleEvent.SETUP.register(() -> FoodConfigManager.rebuild("registry setup"));
+		// SETUP rebuild removed: on 1.20.1+ Forge SETUP fires before other mods have finished
+		// RegisterEvent, so the registry walk would skip half the modpack. SERVER_STARTED plus the
+		// first-tick / first-join pass below all run after the registry is closed, and
+		// FoodEffort.tagsBound() gates any pass that would still be too early.
 
 		// recipes exist by now, and so do the registries a 1.20 recipe needs to report its own result
 		LifecycleEvent.SERVER_STARTED.register(server -> {
@@ -134,21 +135,18 @@ public class SOLValheim
 				FoodEffort.useRegistries(player.server.registryAccess());
 				FoodConfigManager.rebuild("final pricing pass (player join)");
 			}
-
 			SOLValheimNetwork.sendTo(player);
 			SOLValheimNetwork.sendFlags(player);
 
-			// temporary diagnostics for the missing-advancement-tabs report: says whether the server
-			// still holds the full tree at the moment the client sync would go out
-			SOLValheim.LOGGER.info("[sol_valheim] {} joined; server advancement table holds {} entries",
+			SOLValheim.LOGGER.debug("[sol_valheim] {} joined; server advancement table holds {} entries",
 					player.getGameProfile().getName(), player.server.getAdvancements().getAllAdvancements().size());
-		});
+	});
 
-		// one save's recipe table has no business pricing the next save's food
-		LifecycleEvent.SERVER_STOPPED.register(server -> {
+	// one save's recipe table has no business pricing the next save's food
+	LifecycleEvent.SERVER_STOPPED.register(server -> {
 			FoodEffort.clear();
 			FINAL_PRICING_PASS.set(false);
-		});
+	});
 
 		SOLValheimCommands.register();
 	}

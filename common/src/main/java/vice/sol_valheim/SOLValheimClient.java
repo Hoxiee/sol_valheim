@@ -29,7 +29,10 @@ public class SOLValheimClient
     private static Float serverFoodDecayMinFraction;
 
     public static void init() {
-        hud = new FoodHUD();
+        // one FoodHUD per client session - killing and recreating on quit/join leaves a window
+        // where food can expire with hud == null, dropping the expiry flash
+        if (hud == null)
+            hud = new FoodHUD();
 
         SOLValheimNetwork.registerClientReceivers();
 
@@ -38,6 +41,9 @@ public class SOLValheimClient
             FoodConfigManager.clearSynced();
             clearServerFlags();
             DECAY_CUE_FIRED.clear();
+            // the HUD's display stack map is keyed by Item, not by world, so it has to be cleared
+            // explicitly or it grows for the whole client session
+            FoodHUD.clearDisplayStacks();
         });
     }
 

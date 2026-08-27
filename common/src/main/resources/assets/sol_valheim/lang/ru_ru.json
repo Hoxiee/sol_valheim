@@ -12,7 +12,7 @@
   "advancements.sol_valheim.rested.title": "Отдохнувший",
   "advancements.sol_valheim.rested.description": "Переспи ночь в кровати под крышей, рядом с огнём",
   "tooltip.sol_valheim.fading": "(ослабевает)",
-  "tooltip.sol_valheim.decaying": "\uD83D\uDDA4↓ ослабевает по мере истечения",
+  "tooltip.sol_valheim.decaying": "\uD83D\uDDA4↓ Ослабевает со временем",
   "tooltip.sol_valheim.empty_stomach": "☠ Опустошает желудок!",
   "tooltip.sol_valheim.hearts": "❤ %s Сердце",
   "tooltip.sol_valheim.hearts.plural_few": "❤ %s Сердца",

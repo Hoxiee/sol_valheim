@@ -142,8 +142,7 @@ public final class SOLValheimNetwork
         incoming.putAll(batch);
 
         if (last) {
-            FoodConfigManager.setSynced(incoming);
-            SOLValheim.LOGGER.info("[sol_valheim] Received {} food values from the server", incoming.size());
+            SOLValheim.LOGGER.debug("[sol_valheim] Received {} food values from the server", incoming.size());
             incoming = null;
         }
     }

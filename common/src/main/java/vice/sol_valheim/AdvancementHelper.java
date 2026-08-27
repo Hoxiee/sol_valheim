@@ -1,15 +1,15 @@
 package vice.sol_valheim;
 
-#if PRE_CURRENT_MC_1_20_1
-import net.minecraft.advancements.AdvancementProgress;
-#elif POST_CURRENT_MC_1_20_1
+#if MC_1_21_1
 import net.minecraft.advancements.AdvancementHolder;
-import net.minecraft.advancements.AdvancementProgress;
 #endif
+import net.minecraft.advancements.AdvancementProgress;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.player.Player;
 import vice.sol_valheim.utils.RegistryHelper;
+
+import java.util.Map;
 
 /**
  * Awards the mod's built-in advancements straight from code. The JSON files use the
@@ -22,7 +22,14 @@ import vice.sol_valheim.utils.RegistryHelper;
  */
 public final class AdvancementHelper
 {
-    private AdvancementHelper() {}
+    #if MC_1_21_1
+    private static volatile Map<ResourceLocation, AdvancementHolder> sol_valheim$cache = null;
+    #endif
+
+
+    private static volatile boolean sol_valheim$cacheDirty = true;
+
+    public static void sol_valheim$markCacheDirty() { sol_valheim$cacheDirty = true; }
 
     public static void award(Player player, String id) {
         if (!(player instanceof ServerPlayer serverPlayer) || serverPlayer.server == null)
@@ -34,14 +41,23 @@ public final class AdvancementHelper
         var advancement = serverPlayer.server.getAdvancements()
                 .getAdvancement(advancementId);
         #elif POST_CURRENT_MC_1_20_1
-        // 1.20.2 replaced direct lookups with holders - the built-in tree is tiny, so a linear scan
-        // over what the server actually holds beats keeping a second index in sync with reloads
-        AdvancementHolder advancement = null;
-        for (var candidate : serverPlayer.server.getAdvancements().getAllAdvancements()) {
-            if (advancementId.equals(candidate.id())) {
-                advancement = candidate;
-                break;
+        // 1.20.2 replaced direct lookups with holders. Built-in tree is tiny, so we keep an
+        // immutable index rebuilt only on a flagged reload, not on every bite.
+        AdvancementHolder advancement;
+        if (!sol_valheim$cacheDirty) {
+            var cached = sol_valheim$cache;
+            if (cached != null) {
+                advancement = cached.get(advancementId);
+            } else {
+                advancement = null;
             }
+        } else {
+            var fresh = new java.util.HashMap<ResourceLocation, AdvancementHolder>();
+            for (var candidate : serverPlayer.server.getAdvancements().getAllAdvancements())
+                fresh.put(candidate.id(), candidate);
+            sol_valheim$cache = java.util.Map.copyOf(fresh);
+            sol_valheim$cacheDirty = false;
+            advancement = sol_valheim$cache.get(advancementId);
         }
         #endif
 

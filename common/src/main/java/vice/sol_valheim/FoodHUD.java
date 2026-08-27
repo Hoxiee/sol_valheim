@@ -39,8 +39,8 @@ import vice.sol_valheim.utils.RegistryHelper;
 
 import java.util.IdentityHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class FoodHUD implements ClientGuiEvent.RenderHud
 {
@@ -63,6 +63,17 @@ public class FoodHUD implements ClientGuiEvent.RenderHud
     private static final String SPRINT_SPRITE = "textures/gui/sprites/hint/sprint.png";
     private static final String SPRINT_SPRITE_LARGE = "textures/gui/sprites/hint/sprint_large.png";
 
+    /**
+     * Cached sprite path -> ResourceLocation. Sprite lookups happen on every HUD frame; the path
+     * strings are constants, so a {@link ConcurrentHashMap} pays for itself the first frame and
+     * keeps the per-frame work down to a hash lookup.
+     */
+    private static final Map<String, ResourceLocation> SPRITES = new ConcurrentHashMap<>();
+
+    private static ResourceLocation sprite(String path) {
+        return SPRITES.computeIfAbsent(path, p -> ResourceLocation.tryBuild("sol_valheim", p));
+    }
+
     private static final int WHITE = FastColor.ARGB32.color(255, 255, 255, 255);
     private static final int WHITE_BG = FastColor.ARGB32.color(128, 255, 255, 255);
     private static final int YELLOW = FastColor.ARGB32.color(255, 255, 200, 37);
@@ -73,14 +84,28 @@ public class FoodHUD implements ClientGuiEvent.RenderHud
      * Farmer's Delight replaces the cake item with a slice when a piece is eaten. Resolved once and
      * remembered - the old code hit the item registry once per slot per frame.
      */
-    private static Item cakeSliceItem;
-    private static boolean cakeSliceResolved;
+    static Item cakeSliceItem;
+    static boolean cakeSliceResolved;
+    /** Last game time the FD slice probe ran; the check is cheap but still gated by ~5s. */
+    private static long cakeSliceLastCheck;
+
+    /**
+     * Frees every registry-keyed {@link ItemStack} the HUD has built up and drops the cached
+     * Farmer's Delight slice lookup. Called from the client quit handler so the next world starts
+     * with an empty map, not 5000 stale entries. Safe to call repeatedly.
+     */
+    public static void clearDisplayStacks() {
+        DISPLAY_STACKS.clear();
+        cakeSliceItem = null;
+        cakeSliceResolved = false;
+        cakeSliceLastCheck = 0L;
+    }
 
     /** Items are registry singletons and these stacks are never mutated, so one per item forever. */
     private static final Map<Item, ItemStack> DISPLAY_STACKS = new IdentityHashMap<>();
 
     /** How long the "your dish just ran out" highlight stays up, in milliseconds. */
-    private static final int EXPIRY_FLASH_MS = 900;
+    private static final int EXPIRY_FLASH_MS = 1500;
     private static long expiryFlashUntil;
     /** Which cell the current flash points at - a drink frees the last slot, not the first. */
     private static boolean expiryFlashIsDrink;
@@ -164,10 +189,16 @@ public class FoodHUD implements ClientGuiEvent.RenderHud
     }
 
     private static Item farmersDelightCakeSlice() {
-        if (!cakeSliceResolved) {
+        // re-probe every 100 ticks (5s) so a mod that loads after the first HUD frame still gets
+        // picked up - isModLoaded is a Map lookup, the gate is the only cost worth mentioning
+        long tick = client != null && client.level != null ? client.level.getGameTime() : 0L;
+        if (!cakeSliceResolved || tick - cakeSliceLastCheck > 100) {
             cakeSliceResolved = true;
+            cakeSliceLastCheck = tick;
             if (Platform.isModLoaded("farmersdelight"))
                 cakeSliceItem = RegistryHelper.getItem("farmersdelight:cake_slice");
+            else
+                cakeSliceItem = null;
         }
 
         return cakeSliceItem;
@@ -257,19 +288,16 @@ public class FoodHUD implements ClientGuiEvent.RenderHud
         long now = Util.getMillis();
         if (now >= expiryFlashUntil)
             return;
-
         float progress = (expiryFlashUntil - now) / (float) EXPIRY_FLASH_MS;
-        int alpha = (int) (255 * progress * (0.6f + 0.4f * Math.abs(Math.sin(now / 90d))));
+        int alpha = (int) (255 * progress * (0.85f + 0.15f * Math.abs(Math.sin(now / 90d))));
         int color = FastColor.ARGB32.color(alpha, FastColor.ARGB32.red(YELLOW), FastColor.ARGB32.green(YELLOW), FastColor.ARGB32.blue(YELLOW));
 
         // same geometry as renderEmptyFoodSlot; a drink frees the cell after the whole food row
         int offset = expiryFlashIsDrink ? foodData.getMaxItemSlots() + 1 : foodData.ItemEntries.size() + 1;
         var slotOffsets = foodHudConfig.slotOffsets;
         var slotOffset = slotOffsets.size() >= offset ? slotOffsets.get(offset - 1) : null;
-
         int startWidth = width + ((size + 1) * foodHudConfig.xGap * offset) + (slotOffset != null ? slotOffset.xOffset : 0);
         int startHeight = height + ((size + 1) * foodHudConfig.yGap * offset) + (slotOffset != null ? slotOffset.yOffset : 0);
-
         String outlineSprite = useLargeIcons ? OUTLINE_LARGE_SPRITE : OUTLINE_SPRITE;
         blit(graphics, outlineSprite, size, size, startWidth, startHeight, color);
     }
@@ -337,7 +365,7 @@ public class FoodHUD implements ClientGuiEvent.RenderHud
             isSeconds = true;
             time =  (float) food.ticksLeft / 20;
         }
-        var minutes = String.format(Locale.ROOT, "%.0f", time);
+        var minutes = Integer.toString((int) Math.floor(time + 0.5));
 
         var pose = #if PRE_CURRENT_MC_1_19_2 graphics #elif POST_CURRENT_MC_1_20_1 graphics.pose() #endif;
 
@@ -386,8 +414,7 @@ public class FoodHUD implements ClientGuiEvent.RenderHud
 
     private static void blit(#if PRE_CURRENT_MC_1_19_2 PoseStack #elif POST_CURRENT_MC_1_20_1 GuiGraphics #endif graphics, String texture, int width, int height, int x, int y, int color) {
         #if MC_1_21_1
-        // 1.21 retired the raw quad path - the gui graphics tint does the same job
-        var id = ResourceLocation.tryBuild("sol_valheim", texture);
+        var id = sprite(texture);
         graphics.setColor(FastColor.ARGB32.red(color) / 255f, FastColor.ARGB32.green(color) / 255f,
                 FastColor.ARGB32.blue(color) / 255f, FastColor.ARGB32.alpha(color) / 255f);
         graphics.blit(id, x, y, 0, 0, 0, width, height, width, height);
@@ -402,7 +429,7 @@ public class FoodHUD implements ClientGuiEvent.RenderHud
         BufferBuilder buffer = tesselator.getBuilder();
 
         RenderSystem.enableBlend();
-        RenderSystem.setShaderTexture(0, ResourceLocation.tryBuild("sol_valheim", texture));
+        RenderSystem.setShaderTexture(0, sprite(texture));
         RenderSystem.setShader(GameRenderer::getPositionColorTexShader);
         buffer.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR_TEX);
 
@@ -459,7 +486,7 @@ public class FoodHUD implements ClientGuiEvent.RenderHud
         }
 
         RenderSystem.enableBlend();
-        RenderSystem.setShaderTexture(0, ResourceLocation.tryBuild("sol_valheim", texture));
+        RenderSystem.setShaderTexture(0, sprite(texture));
         com.mojang.blaze3d.vertex.BufferUploader.drawWithShader(buffer.build());
         RenderSystem.disableBlend();
         #else
@@ -473,7 +500,7 @@ public class FoodHUD implements ClientGuiEvent.RenderHud
         BufferBuilder buffer = tesselator.getBuilder();
 
         RenderSystem.enableBlend();
-        RenderSystem.setShaderTexture(0, ResourceLocation.tryBuild("sol_valheim", texture));
+        RenderSystem.setShaderTexture(0, sprite(texture));
         buffer.begin(VertexFormat.Mode.TRIANGLE_FAN, DefaultVertexFormat.POSITION_COLOR_TEX);
 
         float middleX = x + ((float) width / 2);
@@ -537,12 +564,16 @@ public class FoodHUD implements ClientGuiEvent.RenderHud
             Lighting.setupForFlatItems();
         }
 
-        itemRenderer.render(stack, ItemTransforms.TransformType.GUI, false, poseStack2, bufferSource, 15728880, OverlayTexture.NO_OVERLAY, bakedModel);
-        bufferSource.endBatch();
-        RenderSystem.enableDepthTest();
-        if (bl) {
-            Lighting.setupFor3DItems();
+        try {
+            itemRenderer.render(stack, ItemTransforms.TransformType.GUI, false, poseStack2, bufferSource, 15728880, OverlayTexture.NO_OVERLAY, bakedModel);
+        } finally {
+            // restore vanilla-default GL state so the next draw call sees a clean baseline;
+            // matching what other GUI renderers do without forcing a depth-test toggle
+            RenderSystem.setShaderColor(1.0F, 1.0F, 1.0F, 1.0F);
+            if (bl)
+                Lighting.setupFor3DItems();
         }
+        bufferSource.endBatch();
 
         poseStack.popPose();
         RenderSystem.applyModelViewMatrix();

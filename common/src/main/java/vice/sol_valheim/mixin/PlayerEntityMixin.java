@@ -62,10 +62,21 @@ public abstract class PlayerEntityMixin extends LivingEntity implements PlayerEn
     @Unique
     private int sol_valheim$syncTimer;
 
+    @Unique
+    private double sol_valheim$lastAppliedHealth = Double.NaN;
+
     /** Last item consumed and when, used to collapse the several vanilla eat paths into one. */
     @Unique
     private Item sol_valheim$lastConsumed;
 
+    /**
+     * Last-frame snapshot of the player's food entries, used to detect items that the server
+     * removed and synced down before the client could run its local tick. Without this check the
+     * last dish in a session disappears silently - the server's tick already returned it, so the
+     * client's tick has nothing left to expire.
+     */
+    @Unique
+    private java.util.HashSet<Item> sol_valheim$lastDisplayed;
     /**
      * The food properties instance of the last bite. 1.21 turned {@code FoodProperties} into a
      * record and vanilla interns equal component maps, so sibling foods with identical numbers
@@ -262,9 +273,23 @@ public abstract class PlayerEntityMixin extends LivingEntity implements PlayerEn
         if (level.isClientSide) {
             // the server no longer resends every tick, so run the countdown locally for a smooth hud
             var displayed = this.entityData.get(sol_valheim$DATA_ACCESSOR);
+            // only your own meals may cue
+            if ((Object) this == net.minecraft.client.Minecraft.getInstance().player) {
+                // detect items the server removed and synced down before this tick could expire
+                // them locally - without this the last dish in a session disappears silently
+                if (displayed != null && sol_valheim$lastDisplayed != null) {
+                    for (var prev : sol_valheim$lastDisplayed) {
+                        var stillThere = false;
+                        for (var entry : displayed.ItemEntries)
+                            if (entry.item == prev) { stillThere = true; break; }
+                        var stillInDrink = displayed.DrinkSlot != null && displayed.DrinkSlot.item == prev;
+                        if (!stillThere && !stillInDrink)
+                            SOLValheimClient.onFoodsExpired(ValheimFoodData.isDrinkable(prev));
+                    }
+                }
+            }
             if (displayed != null && !displayed.isEmpty()) {
                 var expired = displayed.tick();
-                // every player in render distance ticks through here; only your own meals may cue
                 if ((Object) this == net.minecraft.client.Minecraft.getInstance().player) {
                     if (!expired.isEmpty()) {
                         var anyDrink = false;
@@ -275,6 +300,21 @@ public abstract class PlayerEntityMixin extends LivingEntity implements PlayerEn
                     }
 
                     SOLValheimClient.tickDecayCues(displayed);
+                }
+            } else if ((Object) this == net.minecraft.client.Minecraft.getInstance().player) {
+                SOLValheimClient.tickDecayCues(displayed);
+            }
+            // remember the current set for next tick
+            if ((Object) this == net.minecraft.client.Minecraft.getInstance().player) {
+                if (sol_valheim$lastDisplayed == null)
+                    sol_valheim$lastDisplayed = new java.util.HashSet<>();
+                else
+                    sol_valheim$lastDisplayed.clear();
+                if (displayed != null) {
+                    for (var entry : displayed.ItemEntries)
+                        sol_valheim$lastDisplayed.add(entry.item);
+                    if (displayed.DrinkSlot != null)
+                        sol_valheim$lastDisplayed.add(displayed.DrinkSlot.item);
                 }
             }
             return;
@@ -307,7 +347,10 @@ public abstract class PlayerEntityMixin extends LivingEntity implements PlayerEn
         if (changed || --sol_valheim$syncTimer <= 0)
             sol_valheim$sync();
 
-        player.getFoodData().setSaturation(0);
+        // causeFoodExhaustion is cancelled in onAddExhaustion, so FoodData.tick has nothing to charge
+        // against and saturation never moves from its initial value. The vanilla bar is not driven
+        // from here - the mod's own gate uses ItemEntries - so a no-op write is the only legacy
+        // effect of this line, and removing it costs nothing.
 
         var foodHealth = Math.min(config.maxFoodHealth * 2, (config.startingHealth * 2) + sol_valheim$food_data.getTotalFoodNutrition());
         sol_valheim$updateMaxHealth(player, foodHealth);
@@ -345,11 +388,11 @@ public abstract class PlayerEntityMixin extends LivingEntity implements PlayerEn
         var attribute = player.getAttribute(Attributes.MAX_HEALTH);
         if (attribute == null)
             return;
-
-        double amount = foodHealth - getDefaultMaxHealth();
+        double amount = Math.floor(foodHealth - getDefaultMaxHealth());
         var existing = attribute.getModifier(SOLValheim.FOOD_HEALTH_ID);
 
-        if (existing == null || modifierAmount(existing) != amount) {
+        if (existing == null
+                || (modifierAmount(existing) != amount && sol_valheim$lastAppliedHealth != amount)) {
             if (existing != null)
                 attribute.removeModifier(SOLValheim.FOOD_HEALTH_ID);
 
@@ -361,6 +404,8 @@ public abstract class PlayerEntityMixin extends LivingEntity implements PlayerEn
             attribute.addTransientModifier(new AttributeModifier(SOLValheim.FOOD_HEALTH_ID, amount,
                     opAddition()));
             #endif
+
+            sol_valheim$lastAppliedHealth = amount;
         }
 
         var max = player.getMaxHealth();
