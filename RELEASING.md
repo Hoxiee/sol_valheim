@@ -55,6 +55,8 @@ Modrinth/CurseForge tokens are configured.
 
 ## 5. Publishing to Modrinth/CurseForge (not yet)
 
+`gradle.properties`: `REPLACE_ME` values for `curseforge_id` and `modrinth_id` must be replaced before any `publishMods` task. Until replaced, `publishMods` will fail with a project id error.
+
 Before the first published upload:
 
 - **Replace the inherited project IDs.** `curseforge_id` and `modrinth_id` in `gradle.properties`
