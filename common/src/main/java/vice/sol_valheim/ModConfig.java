@@ -502,6 +502,13 @@ public class ModConfig extends PartitioningSerializer.GlobalData {
                 foodHudConfig.slotOffsets = new ArrayList<>();
 
             foodHudConfig.slotOffsets.removeIf(Objects::isNull);
+
+            if (foodHudConfig.autoFitMode == null)
+                foodHudConfig.autoFitMode = ModConfig.Client.AutoFitMode.RIGHT_EDGE;
+            foodHudConfig.autoFitOffsetX = Mth.clamp(foodHudConfig.autoFitOffsetX, -8192, 8192);
+            foodHudConfig.autoFitOffsetY = Mth.clamp(foodHudConfig.autoFitOffsetY, -8192, 8192);
+            foodHudConfig.maxRowWidth = Mth.clamp(foodHudConfig.maxRowWidth, 0, 1024);
+
         }
 
         public static class RegenComponentConfig {
@@ -548,6 +555,32 @@ public class ModConfig extends PartitioningSerializer.GlobalData {
                     Should follow the format: {int xOffset, int yOffset} for each slot you want to style. First entry affects first/rightmost slot, second affects second slot, etc...
                     """)
             public List<SlotComponentConfig> slotOffsets = new ArrayList<>();
+            @ConfigEntry.Gui.Tooltip @Comment("Override the row's manual anchor with autoFitAnchor* + autoFitOffset*. slotOffsets still apply on top of the computed position.")
+            public boolean autoFit = false;
+            @ConfigEntry.Gui.Tooltip @Comment("Screen anchor X for the auto-fit row: 0 = left edge, 1 = right edge.")
+            public float autoFitAnchorX = 0.5f;
+            @ConfigEntry.Gui.Tooltip @Comment("Screen anchor Y for the auto-fit row: 0 = top edge, 1 = bottom edge. Default sits just above the hotbar.")
+            public float autoFitAnchorY = 0.73f;
+            @ConfigEntry.Gui.Tooltip @Comment("Manual nudge in scaled pixels, applied after autoFitAnchorX * screenW.")
+            public int autoFitOffsetX = 0;
+            @ConfigEntry.Gui.Tooltip @Comment("Manual nudge in scaled pixels, applied after autoFitAnchorY * screenH. Default -44 lifts the row clear of the hotbar at GUI scale 2.")
+            public int autoFitOffsetY = -44;
+            @ConfigEntry.Gui.Tooltip @Comment("RIGHT_EDGE: the rightmost slot lands on the auto-fit anchor (preserves the historical right-edge semantics). LEFT_EDGE: the leftmost slot lands on the anchor. CENTER: the row is centered on the anchor.")
+            public AutoFitMode autoFitMode = AutoFitMode.RIGHT_EDGE;
+            @ConfigEntry.Gui.Tooltip @Comment("Width budget in scaled pixels for the whole food row (icons + gaps). When the row would be wider - more slots - the entire row scales down as one: icons, gaps, per-slot nudges and text all shrink by the same factor, so the geometry is preserved. 0 disables the limit. Independent of autoFit; applies to the default anchor too.")
+            public int maxRowWidth = 100;
+        }
+
+        /**
+         * Which slot the {@code autoFit} anchor refers to. {@code RIGHT_EDGE} reproduces the
+         * historical 3-slot default (the rightmost slot lands where the user pointed); the
+         * others exist for users who want a different reference point without re-tuning
+         * {@code xOffset} every time they bump {@code maxSlots}.
+         */
+        public enum AutoFitMode {
+            RIGHT_EDGE,
+            LEFT_EDGE,
+            CENTER
         }
     }
 }
