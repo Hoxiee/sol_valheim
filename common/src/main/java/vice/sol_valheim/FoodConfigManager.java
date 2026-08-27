@@ -18,6 +18,7 @@ import net.minecraft.world.item.PotionItem;
 import vice.sol_valheim.utils.RegistryHelper;
 
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -103,7 +104,14 @@ public final class FoodConfigManager
         return lastUnbalanced;
     }
 
-    /** True when {@code item}'s raw inputs currently come from a datapack override. */
+    /**
+     * True when {@code item}'s raw inputs currently come from a datapack override.
+     * <p>
+     * Server-side only: {@code datapackEntries} is populated exclusively by the datapack reload
+     * listener, which never runs on the logical client, so on the client this method always
+     * returns {@code false} even when the player connects to a server that ships datapack
+     * overrides. Callers that need a true cross-side answer must derive it themselves.
+     */
     public static boolean isDatapackSourced(Item item) {
         return item != null && datapackEntries.containsKey(item);
     }
@@ -174,7 +182,13 @@ public final class FoodConfigManager
             var source = override != null ? override : entry;
 
             // recorded even for pinned dishes, so the audit command can say what a pin is overruling
-            var effort = FoodEffort.of(item);
+            FoodEffort.Effort effort;
+            try {
+                effort = FoodEffort.of(item);
+            } catch (Exception exception) {
+                SOLValheim.LOGGER.warn("[sol_valheim] Failed to read effort for {}; using gathered", id, exception);
+                effort = FoodEffort.GATHERED;
+            }
             efforts.put(item, effort);
 
             // nothing left to decide, or the model is off
@@ -202,14 +216,18 @@ public final class FoodConfigManager
 
         if (persisting || migrated) {
             AutoConfig.getConfigHolder(ModConfig.class).save();
-
             if (persisting)
-                SOLValheim.LOGGER.info("[sol_valheim] Wrote {} newly generated food values to the config", generated.size());
+                SOLValheim.LOGGER.debug("[sol_valheim] Wrote {} newly generated food values to the config", generated.size());
         }
 
-        SOLValheim.LOGGER.info("[sol_valheim] Resolved food values for {} items ({} from datapacks, {} balanced, "
+        SOLValheim.LOGGER.debug("[sol_valheim] Resolved food values for {} items ({} from datapacks, {} balanced, "
                         + "{} craftable items priced) via {}", resolved.size(), datapack.size(), balanced,
                 FoodEffort.index().size(), trigger);
+
+        #if MC_1_21_1
+        vice.sol_valheim.mixin.FoodDataMixin.sol_valheim$markPropertiesDirty();
+        vice.sol_valheim.AdvancementHelper.sol_valheim$markCacheDirty();
+        #endif
     }
 
     /**
@@ -236,6 +254,12 @@ public final class FoodConfigManager
         if (common.foodConfigVersion >= CURRENT_FOOD_CONFIG_VERSION)
             return false;
 
+        // legacyDefault and generateDefault are pure and idempotent - on a 1000-entry config
+        // naive calling would build 2000 FoodProperties records per migration. Memoise per id so
+        // the work is done once per namespace-key.
+        Map<ResourceLocation, ModConfig.Common.FoodConfig> legacyCache = new HashMap<>();
+        Map<ResourceLocation, ModConfig.Common.FoodConfig> currentCache = new HashMap<>();
+
         var dropped = 0;
         var iterator = common.foodConfigs.entrySet().iterator();
         while (iterator.hasNext()) {
@@ -247,7 +271,9 @@ public final class FoodConfigManager
             if (item == null)
                 continue;
 
-            if (!matchesLegacyDefault(entry.getValue(), item, RegistryHelper.parse(entry.getKey())))
+            var id = RegistryHelper.parse(entry.getKey());
+            if (!matchesLegacyDefault(entry.getValue(), item, id, legacyCache)
+                    && !matchesCurrentDefault(entry.getValue(), item, id, currentCache))
                 continue;
 
             iterator.remove();
@@ -261,7 +287,8 @@ public final class FoodConfigManager
     }
 
     /** True when {@code entry} looks exactly like something the pre balance generator wrote. */
-    private static boolean matchesLegacyDefault(ModConfig.Common.FoodConfig entry, Item item, ResourceLocation id) {
+    private static boolean matchesLegacyDefault(ModConfig.Common.FoodConfig entry, Item item, ResourceLocation id,
+                                                Map<ResourceLocation, ModConfig.Common.FoodConfig> cache) {
         if (entry == null || id == null)
             return false;
 
@@ -272,10 +299,33 @@ public final class FoodConfigManager
         if (entry.extraEffects != null && !entry.extraEffects.isEmpty())
             return false;
 
-        var legacy = legacyDefault(item, id);
+        var legacy = cache.computeIfAbsent(id, k -> legacyDefault(item, k));
         return entry.nutrition == legacy.nutrition
                 && near(entry.saturationModifier, legacy.saturationModifier)
                 && near(entry.healthRegenModifier, legacy.healthRegenModifier);
+    }
+
+    /**
+     * True when {@code entry} matches what the current generator would write. Acts as a second
+     * guard against the legacy trap: if a hand edit happens to share a value with {@code legacyDefault}
+     * (e.g. golden apple at 10/1.5), the legacy matcher alone would delete it; requiring a non-match
+     * with the current default keeps any human edit intact.
+     */
+    private static boolean matchesCurrentDefault(ModConfig.Common.FoodConfig entry, Item item, ResourceLocation id,
+                                                 Map<ResourceLocation, ModConfig.Common.FoodConfig> cache) {
+        if (entry == null || id == null)
+            return false;
+
+        if (entry.overrides != null)
+            return false;
+
+        if (entry.extraEffects != null && !entry.extraEffects.isEmpty())
+            return false;
+
+        var current = cache.computeIfAbsent(id, k -> generateDefault(item, k));
+        return entry.nutrition == current.nutrition
+                && near(entry.saturationModifier, current.saturationModifier)
+                && near(entry.healthRegenModifier, current.healthRegenModifier);
     }
 
     /** Saturation round trips through json as 0.30000001192092896, so exact equality is no use. */
@@ -352,9 +402,23 @@ public final class FoodConfigManager
     }
 
     private static ModConfig.Common.FoodConfig generateDefault(Item item, ResourceLocation id) {
-        var config = new ModConfig.Common.FoodConfig();
+        try {
+            return generateDefaultInternal(item, id);
+        } catch (Exception exception) {
+            SOLValheim.LOGGER.warn("[sol_valheim] Failed to derive default food values for {}; using zeroed config", id, exception);
+            var fallback = new ModConfig.Common.FoodConfig();
+            fallback.nutrition = 0;
+            fallback.saturationModifier = 1f;
+            fallback.healthRegenModifier = 1f;
+            fallback.validate();
+            return fallback;
+        }
+    }
+
+    private static ModConfig.Common.FoodConfig generateDefaultInternal(Item item, ResourceLocation id) {
 
         var food = foodPropertiesOf(item);
+        var config = new ModConfig.Common.FoodConfig();
 
         // Drinks are not edible, so they have no vanilla food properties to read. Edible drinks -
         // honey bottles, most modded juices - keep their own values instead of being flattened.

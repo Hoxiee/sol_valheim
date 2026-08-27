@@ -96,15 +96,23 @@ public class FoodDataMixin implements FoodDataPlayerAccessor
      * a datapack or /reload swapping an item's component instance mid session.
      */
     @Unique
+    private static volatile boolean sol_valheim$propertiesDirty = true;
+
+    @Unique
     private static java.util.IdentityHashMap<FoodProperties, Item> sol_valheim$propertiesIndex;
 
     @Unique
+    public static void sol_valheim$markPropertiesDirty() { sol_valheim$propertiesDirty = true; }
+
+    @Unique
     private static Item sol_valheim$lookupProperties(FoodProperties properties) {
-        var cached = sol_valheim$propertiesIndex;
-        if (cached != null) {
-            var found = cached.get(properties);
-            if (found != null)
-                return found;
+        if (!sol_valheim$propertiesDirty) {
+            var cached = sol_valheim$propertiesIndex;
+            if (cached != null) {
+                var found = cached.get(properties);
+                if (found != null)
+                    return found;
+            }
         }
 
         var rebuilt = new java.util.IdentityHashMap<FoodProperties, Item>(2048);
@@ -120,6 +128,7 @@ public class FoodDataMixin implements FoodDataPlayerAccessor
         }
 
         sol_valheim$propertiesIndex = rebuilt;
+        sol_valheim$propertiesDirty = false;
         return match;
     }
     #endif

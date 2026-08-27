@@ -11,7 +11,6 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.tags.TagKey;
 import net.minecraft.util.Mth;
 import net.minecraft.world.item.Item;
-import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.crafting.Ingredient;
 import net.minecraft.world.item.crafting.Recipe;
 import vice.sol_valheim.utils.RegistryHelper;
@@ -225,7 +224,7 @@ public final class FoodEffort
         try {
             // deliberately mirrors what a crafted chain of that size would have cost, so a rare drop is
             // worth a real recipe rather than living on a scale of its own
-            return switch (new ItemStack(item).getRarity()) {
+            return switch (item.getDefaultInstance().getRarity()) {
                 case UNCOMMON -> new Effort(1, 1);
                 case RARE -> new Effort(2, 2);
                 case EPIC -> new Effort(3, 3);
@@ -308,7 +307,7 @@ public final class FoodEffort
         // quietly reading the previous load's tags). Keep whatever index exists and let the tick or
         // join pass redo this once the probe below turns true.
         if (!tagsBound()) {
-            SOLValheim.LOGGER.info("[sol_valheim] item tags are not bound yet - effort pricing deferred");
+            SOLValheim.LOGGER.debug("[sol_valheim] item tags are not bound yet - effort pricing deferred");
             return;
         }
 
@@ -318,9 +317,9 @@ public final class FoodEffort
         lastStats = new CaptureStats(table.size(), priced.size(),
                 walker.unreadable, walker.noResult, walker.noIngredients, walker.unresolvableReads);
 
-        // INFO on purpose: when a dish suddenly reads as "gathered" between two sessions, this line
-        // is the difference between a bug report and a shrug
-        SOLValheim.LOGGER.info("[sol_valheim] Priced {} craftable items from {} recipes (dropped: {} no result, "
+        // DEBUG because it fires on every recipe reload (typically several per session); the comment
+        // above used to call it INFO, but a packed server's latest.log drowns in it
+        SOLValheim.LOGGER.debug("[sol_valheim] Priced {} craftable items from {} recipes (dropped: {} no result, "
                         + "{} empty ingredients, {} unreadable, {} unresolvable ingredient reads)",
                 priced.size(), table.size(), walker.noResult, walker.noIngredients,
                 walker.unreadable, walker.unresolvableReads);
