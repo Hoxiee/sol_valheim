@@ -238,6 +238,7 @@ is not a drink.
 | `/solvalheim reload` | Re-read the config, re-resolve every food value, and push the result to all connected clients — no restart. |
 | `/solvalheim balance` | Audit the resolved table: per-mod inflation factors, the strongest dishes, and anything towering over vanilla's best. |
 | `/solvalheim dump` | Write the whole resolved table to `config/sol_valheim/food_dump.md` — inputs, measured effort and model constants per dish. |
+| `/solvalheim slots <set\|add> <n> [targets]` | Change a player's food slot cap at runtime; `add` is a delta. Level 2. |
 
 `status` on yourself needs no permission; everything else needs level 2.
 
@@ -310,6 +311,42 @@ cannot run.
 `foodHudConfig.slotOffsets` nudges individual slots — first entry is the rightmost slot. Use it to
 work around another mod's HUD.
 
+#### Row auto-fit — many slots stay clear of the hearts
+
+Two independent mechanisms keep the food row in place as `maxSlots` grows:
+
+**`foodHudConfig.maxRowWidth`** (default `100`) is a width budget for the whole row, icons and gaps
+included. When the row would outgrow it — more slots — the entire row scales down as one: icons,
+gaps, per-slot nudges and text all shrink by the same factor, so the geometry never changes, the
+row just gets smaller. `0` disables the limit. At the default `maxSlots = 3` the row is 59 px and
+renders pixel-identical to an unlimited layout; the budget only starts biting as slots are added,
+so a runtime cap raised via `/solvalheim slots` or an addon compresses the row on the fly instead
+of reaching the hearts row. This works with the plain anchor — no other setting required.
+
+**`foodHudConfig.autoFit`** (default `false`) replaces the manual anchor with a screen-space
+reference point, for packs that also want to move the row:
+
+| Option | Default | |
+|---|---|---|
+| `autoFitMode` | RIGHT_EDGE | Which part of the row lands on the anchor: `RIGHT_EDGE`, `LEFT_EDGE` or `CENTER`. |
+| `autoFitAnchorX` / `autoFitAnchorY` | 0.5 / 0.73 | Screen fraction the anchor is computed from (0 = left/top edge, 1 = right/bottom). |
+| `autoFitOffsetX` / `autoFitOffsetY` | 0 / -44 | Manual nudge in scaled pixels, added to the anchor. |
+
+For example, to center the compressed row over the hotbar's right half:
+
+```json5
+// config/sol_valheim/client.json5
+foodHudConfig: {
+    autoFit: true,
+    autoFitMode: "CENTER",
+    autoFitAnchorX: 0.5,      // screen center …
+    autoFitOffsetX: 46,       // … nudged onto the hotbar's right half
+    autoFitAnchorY: 0.73,
+    autoFitOffsetY: -44,      // just above the hotbar
+    maxRowWidth: 90
+}
+```
+
 ## Advancements
 
 A small built-in tree, awarded by the mod itself: **SOL: Valheim** (root) → **First Meal** (eat a
@@ -337,16 +374,18 @@ extend or replace the JSONs at `data/sol_valheim/advancements/` freely.
 
 ## For developers
 
-Two server-side events, informational and non-cancellable — refusing a meal is the config's job:
+Three server-side events, informational and non-cancellable — refusing a meal is the config's job:
 
 ```java
 SOLValheimEvents.FOOD_EATEN.register((player, item, config) -> { ... });
 SOLValheimEvents.FOOD_EXPIRED.register((player, item) -> { ... });
+SOLValheimEvents.SLOTS_CHANGED.register((player, oldSlots, newSlots) -> { ... });
 ```
 
-`FOOD_EXPIRED` also fires for slots that run down across a skipped night.
+`FOOD_EXPIRED` also fires for slots that run down across a skipped night. `SLOTS_CHANGED` fires
+after a server-side change to a player's slot cap (the `/solvalheim slots` command or the
+`SOLValheimSlots.setMaxSlots` API) with the previous and new counts; clients never see it.
 
-## Building
 
 ```sh
 ./gradlew build                  # jars for every enabled platform
